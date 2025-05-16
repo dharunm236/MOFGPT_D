@@ -1,0 +1,36 @@
+base_model:
+  model_name: "gpt2"
+  pretrained_model_name: "gpt2"
+  resume_from_checkpoint: true
+  pretrained_model_path: "../saved_models/mof_gpt_pretrain_best.pt"
+  # pretrained_model_path: None
+  n_embd: 768 # dimension of embeddings and hidden states
+  n_layer: 4 # number of layers
+  n_head: 8 # number of attention heads
+  n_inner: 3072 # inner dimension in feed-forward layer 4*768
+  activation_function: "gelu_new" # activation function in feed-forward layer
+  resid_pdrop: 0.1 # dropout probability for residual connection
+  embd_pdrop: 0.1 # dropout probability for embedding
+  attn_pdrop: 0.1 # dropout probability for attention
+  layer_norm_epsilon: 0.00001 # epsilon for layer normalization
+  initializer_range: 0.02 # standard deviation of normal initializer
+  use_cache: False
+  # return vals
+  return_dict: True
+  output_attentions: False
+  output_hidden_states: True  
+
+fine_tune:
+  feature_size: 768
+  hidden_sizes: [512, 1]
+  activation_function: "relu"
+  freeze_base_model: false
+  freeze_until_layer: 3 # starts from 0 to freeze_until_layer-1
+  dropout_rate: 0.1
+  use_attention: false
+  use_mean_pooling: true
+  transformer:
+    n_head: 8
+    dim_feedforward: 2048
+    dropout_rate: 0.1
+    num_layers: 4

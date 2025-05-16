@@ -1,0 +1,56 @@
+# config/config_finetune.yaml
+random_seed: 42
+project_name: "mofgpt_finetune_train_test_val"
+
+
+data:
+  train_csv_filename: "../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune/train.csv"
+  val_csv_filename: "../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune/val.csv"
+  test_csv_filename: "../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune/test.csv"
+  vocab_path: "../tokenizer/vocab_with_eos.txt"
+  topology_labels_map_filename: "../tokenizer/topology_labels_map.json"
+  train_test_ratio: 0.8
+  batch_size: 8 #4
+  num_workers: 8 #1
+  ignore_index: -100
+  use_multiprocessing: False
+  tokenizer:
+    max_seq_len: 512
+    pad_token: '[PAD]'
+    mask_token: '[MASK]'
+    bos_token: '[BOS]'
+    eos_token: '[EOS]'
+    unk_token: '[UNK]'
+    add_special_tokens: True
+    truncation: True
+    use_topology: True
+
+model:
+  model_config_filename: "../config/model.yaml"
+
+training:
+  device: "cuda"
+  epochs: 30
+  fp16: True
+  optimizer:
+    lr: 0.0001
+    type: "AdamW"
+    weight_decay: 0.001
+    gradient_accumulation_steps: 1
+  scheduler:
+    type: "none"
+    warmup_ratio: 0.03
+    # for reduce_on_plateau
+    patience: 3
+    factor: 0.5
+    min_lr: 1e-6
+  logging_ratio: 0.025
+  save_ratio: 0.5
+  save_dir: "../saved_models/"
+  grad_clip: true
+  grad_clip_value: 1.0
+  loss_fn: "mae"
+  do_inference: False   
+  saved_dict:  "./pipeline_results/finetune/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt"  #"../saved_models/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt"
+
+  

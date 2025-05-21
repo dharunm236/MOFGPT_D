@@ -1,0 +1,11 @@
+torch==2.7.0
+transformers==4.51.3
+rdkit==2025.3.2
+numpy==2.0.2
+pandas==2.2.3
+scipy==1.13.1
+matplotlib==3.9.4
+seaborn==0.13.2
+tqdm==4.67.1
+wandb==0.19.11
+PyYAML

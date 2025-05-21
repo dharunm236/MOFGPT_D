@@ -19,6 +19,36 @@ import argparse
 from pathlib import Path
 from yaml import FullLoader
 
+def determine_property_name(dataset_path):
+    """Consistently determine property name based on dataset name."""
+    dataset_name = os.path.basename(os.path.dirname(dataset_path))
+    print(f"Dataset name for property detection: {dataset_name}")
+    
+    if "QMOF" in dataset_path:
+        property_name = "Band Gap (eV)"
+        print(f"Detected QMOF dataset - using property name: {property_name}")
+        return property_name
+    elif "hMOF" in dataset_name:
+        # Extract gas type and pressure
+        gas_type = "gas"
+        if "CH4" in dataset_name:
+            gas_type = "CH4"
+        elif "CO2" in dataset_name:
+            gas_type = "CO2"
+        
+        import re
+        pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
+        if pressure_match:
+            pressure = pressure_match.group(1)
+            property_name = f"{gas_type} adsorption at {pressure} bar"
+        else:
+            property_name = f"{gas_type} adsorption"
+        
+        print(f"Detected hMOF dataset - using property name: {property_name}")
+        return property_name
+    
+    # Default if no match
+    return "Property"
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -123,7 +153,7 @@ def analyze_dataset(data_file, property_col, dataset_name):
     Returns:
         Tuple of (property_values, stats)
     """
-    print(f"Analyzing {dataset_name} data from {data_file}, using column {property_col} for property...")
+    print(f"Analyzing {dataset_name} data from {data_file}, using column {property_col} for property...")  
     
     # Load data and extract property values
     property_values = load_dataset(data_file, property_col)
@@ -159,6 +189,8 @@ def analyze_combined_data(dataset_files, property_col, output_dir, property_name
     Returns:
         Tuple of (combined_values, dataset_values, combined_stats, dataset_stats)
     """
+      
+    
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
@@ -513,6 +545,16 @@ def main():
     
     # Filter datasets based on user selection
     dataset_files = {k: v for k, v in dataset_files.items() if k in args.datasets}
+
+        
+    print(f"DEBUG: Before detection, args.property_name = '{args.property_name}'")
+
+    if args.property_name == "Property":
+        train_data_file = config["data"]["train_csv_filename"]
+        args.property_name = determine_property_name(train_data_file)
+        print(f"DEBUG: After detection, args.property_name = '{args.property_name}'")
+    
+    breakpoint()
     
     # Analyze individual and combined datasets
     combined_values, dataset_values, combined_stats, dataset_stats = analyze_combined_data(

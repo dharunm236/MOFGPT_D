@@ -155,7 +155,7 @@ def load_model_and_configs(model_path, config_path, generation_config_path, devi
         print(f"Inferred target type from model path: {target_type}")
 
     try:
-        checkpoint = torch.load(model_path, map_location=device)
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         
         if model_type == "finetune":
             # For fine-tune model, we need to wrap it in LLMFineTuneModel
@@ -939,6 +939,34 @@ def main():
     # Get number of targets and target values
     num_targets = training_config.get("num_targets", 1)
     target_values = training_config.get("target_values", [0.0] * num_targets)
+
+
+    dataset_name = os.path.basename(os.path.dirname(data_config["train_csv_filename"]))
+    print(f"Dataset name: {dataset_name}")
+
+    if args.property_name == "Property":  # Only override if default value is used
+        if "QMOF" in dataset_name:
+            args.property_name = "Band Gap (eV)" 
+            print(f"Setting property name to 'Band Gap (eV)' for QMOF dataset")
+        elif "hMOF" in dataset_name:
+            # Attempt to extract gas type and pressure
+            gas_type = "gas"
+            pressure = ""
+            
+            if "CH4" in dataset_name:
+                gas_type = "CH4"
+            elif "CO2" in dataset_name:
+                gas_type = "CO2"
+            
+            import re
+            pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
+            if pressure_match:
+                pressure = pressure_match.group(1)
+                args.property_name = f"{gas_type} adsorption at {pressure} bar"
+            else:
+                args.property_name = f"{gas_type} adsorption"
+            
+            print(f"Setting property name to '{args.property_name}' for hMOF dataset")
     
 
 

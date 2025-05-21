@@ -359,6 +359,35 @@ def main():
             model_name = Path(args.model).stem
             output_csv = os.path.join(args.output_dir, f"{model_name}_generated_{args.num_generations}.csv")
         
+        dataset_name = os.path.basename(os.path.dirname(data_config["train_csv_filename"]))
+        print(f"Dataset name: {dataset_name}")
+
+        if args.property_name == "Property":  # Only override if default value is used
+            if "QMOF" in dataset_name:
+                args.property_name = "Band Gap (eV)" 
+                print(f"Setting property name to 'Band Gap (eV)' for QMOF dataset")
+            elif "hMOF" in dataset_name:
+                # Attempt to extract gas type and pressure
+                gas_type = "gas"
+                pressure = ""
+                
+                if "CH4" in dataset_name:
+                    gas_type = "CH4"
+                elif "CO2" in dataset_name:
+                    gas_type = "CO2"
+                
+                import re
+                pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
+                if pressure_match:
+                    pressure = pressure_match.group(1)
+                    args.property_name = f"{gas_type} adsorption at {pressure} bar"
+                else:
+                    args.property_name = f"{gas_type} adsorption"
+                
+                print(f"Setting property name to '{args.property_name}' for hMOF dataset")
+        
+        
+        
         # Generate MOFs
         results_df = generate_mofs(
             model=model,

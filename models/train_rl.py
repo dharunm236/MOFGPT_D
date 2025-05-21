@@ -938,6 +938,36 @@ def main():
     dataset_name = config["data"]["train_csv_filename"].split("/")[-2]  # Get the folder name which should be the dataset name
     print(f"Dataset name: {dataset_name}")
     config["project_name"] = f"mofgpt_{dataset_name}"
+
+    if "QMOF" in dataset_name:
+        training_config["optimization_modes"] = ["lower"] * num_targets
+        property_name = "Band Gap (eV)"
+        print(f"Setting optimization mode to 'lower' for QMOF dataset (Band Gap)")
+    elif "hMOF" in dataset_name:
+        training_config["optimization_modes"] = ["higher"] * num_targets
+        # Attempt to extract gas type and pressure
+        gas_type = "gas"
+        pressure = ""
+        
+        if "CH4" in dataset_name:
+            gas_type = "CH4"
+        elif "CO2" in dataset_name:
+            gas_type = "CO2"
+        
+        import re
+        pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
+        if pressure_match:
+            pressure = pressure_match.group(1)
+            property_name = f"{gas_type} adsorption at {pressure} bar"
+        else:
+            property_name = f"{gas_type} adsorption"
+        
+        print(f"Setting optimization mode to 'higher' for hMOF dataset ({property_name})")
+
+    # Store property name in config for consistent reference across modules
+    training_config["property_name"] = property_name
+
+
     if wandb_project and not wandb_project.startswith("#"):
         try:
             print(f"\nInitializing WandB logging with project name: {wandb_project}")

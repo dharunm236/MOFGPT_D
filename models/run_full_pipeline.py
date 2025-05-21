@@ -16,6 +16,37 @@ from modules.model_utils import set_seeds
 from modules.data_utils import validate_generated_file, analyze_data
 
 
+def determine_property_name(dataset_path):
+    """Consistently determine property name based on dataset name."""
+    dataset_name = os.path.basename(os.path.dirname(dataset_path))
+    print(f"Dataset name for property detection: {dataset_name}")
+    
+    if "QMOF" in dataset_name:
+        property_name = "Band Gap (eV)"
+        print(f"Detected QMOF dataset - using property name: {property_name}")
+        return property_name
+    elif "hMOF" in dataset_name:
+        # Extract gas type and pressure
+        gas_type = "gas"
+        if "CH4" in dataset_name:
+            gas_type = "CH4"
+        elif "CO2" in dataset_name:
+            gas_type = "CO2"
+        
+        import re
+        pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
+        if pressure_match:
+            pressure = pressure_match.group(1)
+            property_name = f"{gas_type} adsorption at {pressure} bar"
+        else:
+            property_name = f"{gas_type} adsorption"
+        
+        print(f"Detected hMOF dataset - using property name: {property_name}")
+        return property_name
+    
+    # Default if no match
+    return "Property"
+
 # def run_comparison(train_data_path, finetune_csv, rl_csvs, stats, output_dir, property_name, property_col):
 #     """Run the comparison script to generate normalized plots"""
 #     # Build command to run the comparison script
@@ -432,6 +463,13 @@ def run_pipeline_for_dataset(dataset_folder, args):
     project_name = f"mofgpt_{os.path.basename(dataset_folder)}"
     print(f"\nProcessing dataset: {project_name}")
     
+    property_name = determine_property_name(dataset_folder)
+    print(f"Using property name: {property_name}")
+    
+    # Override args.property_name for this dataset run
+    original_property_name = args.property_name
+    args.property_name = property_name
+
     # Create output directory with project name
     output_dir = f"{project_name}_pipeline_results"
     os.makedirs(output_dir, exist_ok=True)
@@ -654,6 +692,8 @@ def run_pipeline_for_dataset(dataset_folder, args):
     print(f"PIPELINE COMPLETED FOR {project_name}".center(50))
     print("="*50)
     print(f"Results saved to: {output_dir}")
+
+    args.property_name = original_property_name
     
     return True
 
@@ -729,6 +769,15 @@ if __name__ == "__main__":
 
 # python run_full_pipeline.py \
 #     --dataset-folders ../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune ../benchmark_datasets/finetune/hMOF_CH4_0.05_small_mofid_finetune ../benchmark_datasets/finetune/hMOF_CH4_0.9_small_mofid_finetune ../benchmark_datasets/finetune/hMOF_CH4_2.5_small_mofid_finetune ../benchmark_datasets/finetune/hMOF_CH4_4.5_small_mofid_finetune\
+#     --finetune-config ../config/config_finetune.yaml \
+#     --rl-config ../config/rl/config.yaml \
+#     --targets mean mean_plus_1std mean_plus_2std \
+#     --num-generations 30 \
+#     --continue-on-failure
+
+
+# python run_full_pipeline.py \
+#     --dataset-folders ../benchmark_datasets/QMOF_finetune\
 #     --finetune-config ../config/config_finetune.yaml \
 #     --rl-config ../config/rl/config.yaml \
 #     --targets mean mean_plus_1std mean_plus_2std \

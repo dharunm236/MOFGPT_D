@@ -17,6 +17,38 @@ import seaborn as sns
 from pathlib import Path
 from scipy.stats import gaussian_kde
 
+
+def determine_property_name(dataset_path):
+    """Consistently determine property name based on dataset name."""
+    dataset_name = os.path.basename(os.path.dirname(dataset_path))
+    print(f"Dataset name for property detection: {dataset_name}")
+    
+    if "QMOF" in dataset_name:
+        property_name = "Band Gap (eV)"
+        print(f"Detected QMOF dataset - using property name: {property_name}")
+        return property_name
+    elif "hMOF" in dataset_name:
+        # Extract gas type and pressure
+        gas_type = "gas"
+        if "CH4" in dataset_name:
+            gas_type = "CH4"
+        elif "CO2" in dataset_name:
+            gas_type = "CO2"
+        
+        import re
+        pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
+        if pressure_match:
+            pressure = pressure_match.group(1)
+            property_name = f"{gas_type} adsorption at {pressure} bar"
+        else:
+            property_name = f"{gas_type} adsorption"
+        
+        print(f"Detected hMOF dataset - using property name: {property_name}")
+        return property_name
+    
+    # Default if no match
+    return "Property"
+
 def load_data(filepath, column=None, header=None):
     """
     Load data from CSV file, handling both with and without headers
@@ -977,6 +1009,14 @@ def main():
     
     # Load fine-tuned model data (with header)
     finetune_data = load_data(args.finetune_data, args.property_col, header=0)
+
+   
+
+    if args.property_name == "Property":
+        args.property_name = determine_property_name(args.original_data)
+        print(f"Using detected property name: {args.property_name}")
+
+    
     
     # Load RL model data (with header)
     rl_data = {}

@@ -6,6 +6,20 @@
 
 MOFGPT is a comprehensive pipeline for generating novel Metal-Organic Frameworks (MOFs) with targeted properties using reinforcement learning. The framework enables fine-tuning of language models on MOF representations and subsequently optimizing them toward specific property targets through reinforcement learning.
 
+
+<table>
+  <tr>
+    <td>
+      <h2>MOFGPT: Metal-Organic Framework Generation with Reinforcement Learning</h2>
+      <p><strong>MOFGPT</strong> is a comprehensive pipeline for generating novel Metal-Organic Frameworks (MOFs) with targeted properties using reinforcement learning. The framework enables fine-tuning of language models on MOF representations and subsequently optimizing them toward specific property targets through reinforcement learning.</p>
+    </td>
+    <td>
+      <img src="https://github.com/srivathsanb14/MOFGPT/blob/main/MOFGPT_icon.png" width="200">
+    </td>
+  </tr>
+</table>
+
+
 This project provides a complete workflow for:
 1. Fine-tuning generative models on MOF datasets
 2. Generating new MOF candidates from fine-tuned models

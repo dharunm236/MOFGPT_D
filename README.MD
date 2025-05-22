@@ -11,18 +11,6 @@ This project provides a complete workflow for:
 4. Analyzing and comparing the generated MOFs against training data
 5. Visualizing distributions of MOF properties
 
-## Requirements
-
-- Python 3.8+
-- PyTorch 1.8+
-- pandas
-- numpy
-- matplotlib
-- seaborn
-- scikit-learn
-- rdkit (for MOF validation)
-- wandb (for experiment tracking)
-
 ## Project Structure
 
 ```
@@ -72,19 +60,6 @@ cd mofgpt
 conda create -n mofgpt python=3.8
 conda activate mofgpt
 pip install -r requirements.txt
-```
-
-3. Install RDKit (for MOF validation):
-```bash
-conda install -c conda-forge rdkit
-```
-
-4. Install PyTorch (with CUDA if available):
-```bash
-# CUDA version
-pip install torch==1.12.0+cu113 -f https://download.pytorch.org/whl/torch_stable.html
-# CPU version
-pip install torch==1.12.0
 ```
 
 ## Usage

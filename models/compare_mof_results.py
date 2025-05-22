@@ -39,9 +39,9 @@ def determine_property_name(dataset_path):
         pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
         if pressure_match:
             pressure = pressure_match.group(1)
-            property_name = f"{gas_type} adsorption at {pressure} bar"
+            property_name = f"{gas_type} adsorption at {pressure} bar (mol/kg)"
         else:
-            property_name = f"{gas_type} adsorption"
+            property_name = f"{gas_type} adsorption (mol/kg)"
         
         print(f"Detected hMOF dataset - using property name: {property_name}")
         return property_name
@@ -111,474 +111,6 @@ def generate_stats_table(data_dict):
     return pd.DataFrame(stats)
 
 
-# def plot_normalized_distributions(data_dict, target_values=None, output_path=None, 
-#                                  property_name="Property", figsize=(12, 6)):
-#     """
-#     Create normalized density plots for comparison with matching-colored target markers.
-
-#     Args:
-#         data_dict: Dictionary of {name: data_series}
-#         target_values: Dictionary of target values to mark (color-matched to curves)
-#         output_path: Path to save the plot (if None, displays instead)
-#         property_name: Name of the property for title and labels
-#         figsize: Size of the figure as (width, height)
-#     """
-#     plt.figure(figsize=figsize)
-
-#     # Define color palette
-#     colors = plt.cm.tab10(np.linspace(0, 1, len(data_dict)))
-#     name_to_color = {}
-
-#     # Plot each distribution with normalization
-#     for i, (name, series) in enumerate(data_dict.items()):
-#         if series is not None and len(series) > 0:
-#             color = colors[i]
-#             name_to_color[name] = color
-#             sns.kdeplot(
-#                 series,
-#                 label=f'{name} (n={len(series)})',
-#                 color=color,
-#                 fill=True,
-#                 alpha=0.3,
-#                 common_norm=False,
-#                 bw_adjust=1.0
-#             )
-
-#     # Add target markers if provided
-#     if target_values:
-#         for name, value in target_values.items():
-#             color = name_to_color.get(name, 'red')
-#             # Add triangle marker at a low y-value (just above zero)
-#             plt.plot([value], [0.001], marker='v', markersize=10, color=color, zorder=5)
-#             # Annotated label below the marker
-#             plt.annotate(f'{name}: {value:.2f}',
-#                          xy=(value, 0.001),
-#                          xytext=(0, -25),
-#                          textcoords='offset points',
-#                          ha='center', fontsize=10,
-#                          color=color,
-#                          bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=color, alpha=0.8))
-
-#     # Aesthetic improvements
-#     plt.xticks(fontsize=14)
-#     plt.yticks(fontsize=14)
-#     plt.xlabel(property_name, fontsize=16, fontweight='bold')
-#     plt.ylabel("Density (normalized)", fontsize=16, fontweight='bold')
-#     plt.legend(fontsize=12, frameon=True, framealpha=0.9, edgecolor='gray')
-#     plt.tight_layout()
-
-#     # Save or show
-#     if output_path:
-#         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-#         plt.savefig(output_path, dpi=1200, bbox_inches='tight')
-#         print(f"Saved plot to {output_path}")
-#     else:
-#         plt.show()
-
-#     plt.close()
-
-
-
-# def plot_normalized_distributions(data_dict, target_values=None, output_path=None, 
-#                                  property_name="Property", figsize=(12, 6)):
-#     """
-#     Create normalized density plots with target markers on x-axis.
-    
-#     Args:
-#         data_dict: Dictionary of {name: data_series}
-#         target_values: Dictionary of target values to mark
-#         output_path: Path to save the plot
-#         property_name: Name of the property for labels
-#         figsize: Figure dimensions
-#     """
-#     plt.figure(figsize=figsize)
-#     ax = plt.gca()
-
-#     # Define color palette
-#     colors = plt.cm.tab10(np.linspace(0, 1, len(data_dict)))
-#     name_to_color = {}
-    
-#     # Group data by type
-#     original_data = None
-#     finetune_data = None
-#     rl_data = {}
-    
-#     for name, series in data_dict.items():
-#         if name.lower() == "original data" and series is not None:
-#             original_data = series
-#         elif name.lower() == "fine-tuned model" and series is not None:
-#             finetune_data = series
-#         elif series is not None and len(series) > 0:
-#             rl_data[name] = series
-
-#     # First pass: compute KDEs to get curve data
-#     kde_data = {}
-#     for name, series in data_dict.items():
-#         if series is not None and len(series) > 0:
-#             # Compute KDE manually
-#             kde = gaussian_kde(series)
-#             x = np.linspace(series.min(), series.max(), 1000)
-#             y = kde(x)
-#             kde_data[name] = (x, y)
-
-#     # Set up custom legend handlers
-#     legend_elements = []
-    
-#     # Second pass: plot distributions with grouping
-#     for i, (name, series) in enumerate(data_dict.items()):
-#         if series is not None and len(series) > 0:
-#             color = colors[i]
-#             name_to_color[name] = color
-#             x, y = kde_data[name]
-            
-#             # Plot filled KDE
-#             ax.fill_between(x, y, alpha=0.2, color=color)
-            
-#             if name.lower() == "original data":
-#                 label = f'Original Data (n={len(series)})'
-#             elif name.lower() == "fine-tuned model":
-#                 label = f'Fine-tuned Model (n={len(series)})'
-#             else:
-#                 # For RL models
-#                 is_target_in_name = any(target in name for target in ["mean", "std"])
-#                 if is_target_in_name:
-#                     label = f'{name} (n={len(series)})'
-#                 else:
-#                     label = f'{name} (n={len(series)})'
-            
-#             ax.plot(x, y, color=color, linewidth=2, label=label)
-
-#     # Add target markers on x-axis
-#     if target_values:
-#         target_handles = []
-#         target_labels = []
-        
-#         # Find the y-range for placing the markers
-#         y_min, y_max = ax.get_ylim()
-#         marker_y = y_min - (y_max - y_min) * 0.05  # Slightly below the x-axis
-        
-#         for name, value in target_values.items():
-#             # Skip non-descriptive names like keys from stats.json
-#             if name.lower() in ["mean", "mean plus 1std", "mean plus 2std", "mean minus 1std"]:
-#                 # Use a color matching the RL model if possible, otherwise use a distinct color
-#                 for rl_name, rl_series in rl_data.items():
-#                     if name.lower().replace(" ", "_") in rl_name.lower():
-#                         color = name_to_color.get(rl_name, 'black')
-#                         break
-#                 else:
-#                     color = 'black'
-                
-#                 # Add a marker on the x-axis
-#                 triangle = ax.plot([value], [marker_y], 
-#                         marker='^', markersize=10, 
-#                         markeredgecolor='black',
-#                         markeredgewidth=1,
-#                         color=color, zorder=5)[0]
-                
-#                 # Add target value label below the marker
-#                 ax.annotate(f'{value:.4f}',
-#                           xy=(value, marker_y),
-#                           xytext=(0, -15),
-#                           textcoords='offset points',
-#                           ha='center', fontsize=10,
-#                           color=color,
-#                           bbox=dict(boxstyle="round,pad=0.2",
-#                                   fc="white", ec=color,
-#                                   alpha=0.8, lw=1))
-                
-#                 # Add to separate legend grouping
-#                 target_handles.append(triangle)
-#                 target_labels.append(f"{name}: {value:.4f}")
-        
-#         # If we have target markers, add a separate legend group
-#         if target_handles:
-#             # Add a separator line to the main legend
-#             legend_elements.append(plt.Line2D([0], [0], color='none', label=' '))
-#             # Add "Target Values:" header 
-#             legend_elements.append(plt.Line2D([0], [0], color='none', label='Target Values:'))
-#             # Add target elements to legend
-#             for handle, label in zip(target_handles, target_labels):
-#                 marker_style = dict(marker='^', markersize=8, fillstyle='full', 
-#                                    markeredgecolor='black', markeredgewidth=1)
-#                 legend_elements.append(plt.Line2D([0], [0], color=handle.get_color(), 
-#                                                **marker_style, label=label))
-
-#     # Drawing the complete box
-#     ax.spines['top'].set_visible(True)
-#     ax.spines['right'].set_visible(True)
-#     ax.spines['bottom'].set_visible(True)
-#     ax.spines['left'].set_visible(True)
-    
-#     # Styling
-#     ax.set_xlabel(property_name, fontsize=16, fontweight='bold')
-#     ax.set_ylabel("Density (normalized)", fontsize=16, fontweight='bold')
-#     ax.tick_params(axis='both', labelsize=14)
-    
-#     # Create a legend with all elements
-#     if legend_elements:
-#         first_legend = ax.legend(fontsize=12, frameon=True, framealpha=0.9, 
-#                                 edgecolor='gray', loc='upper right')
-#         ax.add_artist(first_legend)
-#         ax.legend(handles=legend_elements, fontsize=12, frameon=True, 
-#                  framealpha=0.9, edgecolor='gray', loc='upper left')
-#     else:
-#         ax.legend(fontsize=12, frameon=True, framealpha=0.9, edgecolor='gray')
-    
-#     # Ensure axes extend slightly beyond data
-#     x_min, x_max = ax.get_xlim()
-#     x_range = x_max - x_min
-#     ax.set_xlim(x_min - 0.05 * x_range, x_max + 0.05 * x_range)
-    
-#     y_min, y_max = ax.get_ylim()
-#     ax.set_ylim(y_min, y_max * 1.05)  # Add some headroom
-    
-#     plt.tight_layout()
-
-#     # Output
-#     if output_path:
-#         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-#         plt.savefig(output_path, dpi=300, bbox_inches='tight')
-#         print(f"Saved plot to {output_path}")
-#     else:
-#         plt.show()
-#     plt.close()
-
-
-
-
-
-
-
-# def plot_normalized_distributions(data_dict, target_values=None, output_path=None, 
-#                                  property_name="Property", figsize=(12, 6)):
-#     """
-#     Create normalized density plots with target markers on x-axis.
-    
-#     Args:
-#         data_dict: Dictionary of {name: data_series}
-#         target_values: Dictionary of target values to mark
-#         output_path: Path to save the plot
-#         property_name: Name of the property for labels
-#         figsize: Figure dimensions
-#     """
-#     plt.figure(figsize=figsize)
-#     ax = plt.gca()
-
-#     # Define color palette - ensure distinct colors
-#     colors = plt.cm.tab10(np.linspace(0, 1, len(data_dict)))
-#     name_to_color = {}
-    
-#     # Get global min/max to ensure we capture full distribution range
-#     all_values = []
-#     for name, series in data_dict.items():
-#         if series is not None and len(series) > 0:
-#             all_values.extend(series.values)
-    
-#     global_min = min(all_values) if all_values else 0
-#     global_max = max(all_values) if all_values else 1
-    
-#     # Add padding to ensure we don't cut off distributions
-#     padding = (global_max - global_min) * 0.2
-#     plot_min = global_min - padding
-#     plot_max = global_max + padding
-    
-#     # Group data by type
-#     original_data = None
-#     finetune_data = None
-#     rl_data = {}
-    
-#     # First pass: compute KDEs to get curve data with extended range
-#     kde_data = {}
-#     for i, (name, series) in enumerate(data_dict.items()):
-#         if series is not None and len(series) > 0:
-#             name_to_color[name] = colors[i]
-            
-#             if name.lower() == "original data":
-#                 original_data = series
-#             elif name.lower() == "fine-tuned model":
-#                 finetune_data = series
-#             elif "mean" in name.lower() or "std" in name.lower():
-#                 rl_data[name] = series
-            
-#             # Use a wider range for KDE to prevent cutoffs
-#             try:
-#                 # Compute KDE with adaptive bandwidth based on data size
-#                 if len(series) < 10:
-#                     # For small samples, use a wider bandwidth
-#                     bw = 0.5  # Larger bandwidth for smoother curve
-#                     kde = gaussian_kde(series, bw_method=bw)
-#                 else:
-#                     # Default bandwidth for larger samples
-#                     kde = gaussian_kde(series)
-                
-#                 # Generate more points for smoother curves
-#                 x = np.linspace(plot_min, plot_max, 2000)
-#                 y = kde(x)
-#                 kde_data[name] = (x, y)
-#             except Exception as e:
-#                 print(f"Warning: KDE failed for {name}: {e}")
-#                 # Fallback for very small datasets - create simple histogram
-#                 if len(series) > 0:
-#                     hist, bin_edges = np.histogram(series, bins=20, density=True)
-#                     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-#                     kde_data[name] = (bin_centers, hist)
-
-#     # Separate legends for distributions and targets
-#     distribution_handles = []
-#     distribution_labels = []
-#     target_handles = []
-#     target_labels = []
-
-#     # Second pass: plot distributions
-#     for name, series in data_dict.items():
-#         if series is not None and len(series) > 0 and name in kde_data:
-#             color = name_to_color[name]
-#             x, y = kde_data[name]
-            
-#             # Plot filled KDE
-#             ax.fill_between(x, y, alpha=0.2, color=color)
-            
-#             # Create label with sample count
-#             if name.lower() == "original data":
-#                 label = f'Original Data (n={len(series)})'
-#             elif name.lower() == "fine-tuned model":
-#                 label = f'Fine-tuned Model (n={len(series)})'
-#             else:
-#                 # # For RL models - simplify names if they contain targets
-#                 # simple_name = name
-#                 # for target_text in ["mean", "mean_plus_1std", "mean_plus_2std", "mean_minus_1std"]:
-#                 #     if target_text.lower().replace("_", " ") in name.lower():
-#                 #         simple_name = target_text.replace("_", " ").title()
-#                 #         break
-#                 # label = f'{simple_name} (n={len(series)})'
-
-
-#                 # For RL models - create clear names based on target type
-#                 simple_name = name
-#                 # Check if this is a target-specific RL model
-#                 target_mapping = {
-#                     "mean_plus_1std": "Mean + 1σ Target", 
-#                     "mean_plus_2std": "Mean + 2σ Target",
-#                     "mean_minus_1std": "Mean - 1σ Target",
-#                     "mean_minus_2std": "Mean - 2σ Target",
-#                     "mean_plus_3std": "Mean + 3σ Target",
-#                     "mean_minus_3std": "Mean - 3σ Target",
-#                     "mean": "Mean Target",
-#                     "custom": "Custom Target"
-#                 }
-
-#                 # Try to extract the target type from the name
-#                 for target_key, target_label in target_mapping.items():
-#                     if target_key in name.lower():
-#                         simple_name = target_label
-#                         break
-
-#                 label = f'{simple_name} (n={len(series)})'
-            
-#             # Plot the line and store for legend
-#             line = ax.plot(x, y, color=color, linewidth=2)[0]
-#             distribution_handles.append(line)
-#             distribution_labels.append(label)
-
-#     # Third pass: add target markers on x-axis
-#     if target_values:
-#         # Find the y-range for placing the markers
-#         y_min, y_max = ax.get_ylim()
-#         marker_y = -0.03 * y_max  # Below the x-axis
-        
-#         # Ensure axis extends to show markers
-#         ax.set_ylim(marker_y, y_max * 1.05)
-        
-#         # Add a label for target values section
-#         for name, value in target_values.items():
-#             # Determine target color - try to match with corresponding RL model
-#             target_color = 'black'  # Default
-#             target_name_normalized = name.lower().replace(" ", "_")
-            
-#             # Find matching RL dataset if possible
-#             for rl_name in rl_data:
-#                 if target_name_normalized in rl_name.lower().replace(" ", "_"):
-#                     target_color = name_to_color.get(rl_name, 'black')
-#                     break
-            
-#             # Add triangle marker on x-axis
-#             triangle = ax.plot([value], [marker_y], 
-#                     marker='^', markersize=12, 
-#                     markeredgecolor='black',
-#                     markeredgewidth=1.5,
-#                     color=target_color, zorder=5)[0]
-            
-#             # Add value label below the marker
-#             ax.annotate(f'{value:.4f}',
-#                       xy=(value, marker_y),
-#                       xytext=(0, -20),
-#                       textcoords='offset points',
-#                       ha='center', fontsize=11,
-#                       color=target_color,
-#                       fontweight='bold',
-#                       bbox=dict(boxstyle="round,pad=0.3",
-#                               fc="white", ec=target_color,
-#                               alpha=0.9, lw=1))
-            
-#             # Add to target legend
-#             target_handles.append(triangle)
-#             target_labels.append(f"{name}: {value:.4f}")
-    
-#     # Drawing the complete box - ensure all spines are visible
-#     for spine in ax.spines.values():
-#         spine.set_visible(True)
-#         spine.set_linewidth(1.2)
-    
-#     # Styling
-#     ax.set_xlabel(property_name, fontsize=16, fontweight='bold')
-#     ax.set_ylabel("Density (normalized)", fontsize=16, fontweight='bold')
-#     ax.tick_params(axis='both', labelsize=14)
-    
-#     # Ensure x-axis range captures all data plus padding
-#     ax.set_xlim(plot_min, plot_max)
-    
-#     # Create main distribution legend
-#     if distribution_handles:
-#         first_legend = ax.legend(
-#             handles=distribution_handles,
-#             labels=distribution_labels,
-#             fontsize=12, 
-#             frameon=True, 
-#             framealpha=0.9,
-#             edgecolor='gray', 
-#             loc='upper right'
-#         )
-#         ax.add_artist(first_legend)
-    
-#     # Create target values legend
-#     if target_handles:
-#         # Create header for targets section
-#         header_handle = plt.Line2D([0], [0], color='none')
-#         header_label = 'Target Values:'
-        
-#         # Create target legend with header
-#         second_legend = ax.legend(
-#             handles=[header_handle] + target_handles,
-#             labels=[header_label] + target_labels,
-#             fontsize=12, 
-#             frameon=True, 
-#             framealpha=0.9,
-#             edgecolor='gray', 
-#             loc='upper left'
-#         )
-#         ax.add_artist(second_legend)
-    
-#     plt.tight_layout()
-
-#     # Output
-#     if output_path:
-#         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-#         plt.savefig(output_path, dpi=300, bbox_inches='tight')
-#         print(f"Saved plot to {output_path}")
-#     else:
-#         plt.show()
-#     plt.close()
-
 def plot_normalized_distributions(data_dict, target_values=None, output_path=None, 
                                  property_name="Property", figsize=(12, 6)):
     """
@@ -608,9 +140,17 @@ def plot_normalized_distributions(data_dict, target_values=None, output_path=Non
     global_max = max(all_values) if all_values else 1
     
     # Add padding to ensure we don't cut off distributions
-    padding = (global_max - global_min) * 0.2
-    plot_min = global_min - padding
-    plot_max = global_max + padding
+    # padding = (global_max - global_min) * 0.2
+    # plot_min = global_min - padding
+    # plot_max = global_max + padding
+
+    q_low = np.percentile(all_values, 1)
+    q_high = np.percentile(all_values, 99)
+    range_padding = (q_high - q_low) * 0.1
+
+    plot_min = q_low - range_padding
+    plot_max = q_high + range_padding
+
     
     # Group data by type
     original_data = None
@@ -758,7 +298,7 @@ def plot_normalized_distributions(data_dict, target_values=None, output_path=Non
         spine.set_linewidth(1.2)
     
     # Styling
-    ax.set_xlabel(property_name, fontsize=16, fontweight='bold')
+    ax.set_xlabel(property_name, fontsize=16, fontweight='bold', labelpad=10)
     ax.set_ylabel("Density (normalized)", fontsize=16, fontweight='bold')
     ax.tick_params(axis='both', labelsize=14)
     
@@ -770,7 +310,7 @@ def plot_normalized_distributions(data_dict, target_values=None, output_path=Non
         first_legend = ax.legend(
             handles=distribution_handles,
             labels=distribution_labels,
-            fontsize=12, 
+            fontsize=14, 
             frameon=True, 
             framealpha=0.9,
             edgecolor='gray', 
@@ -788,11 +328,12 @@ def plot_normalized_distributions(data_dict, target_values=None, output_path=Non
         second_legend = ax.legend(
             handles=[header_handle] + target_handles,
             labels=[header_label] + target_labels,
-            fontsize=12, 
+            fontsize=14, 
             frameon=True, 
             framealpha=0.9,
             edgecolor='gray', 
-            loc='upper left'
+            loc='upper center',
+            # bbox_to_anchor=(0.2, 0.98)
         )
         ax.add_artist(second_legend)
     
@@ -852,8 +393,8 @@ def plot_boxplot_comparison(data_dict, target_values=None, output_path=None,
     plt.xticks(rotation=45 if len(data_dict) > 4 else 0, ha='right' if len(data_dict) > 4 else 'center')
     
     # Add labels and title
-    plt.xlabel('', fontsize=12)  # Empty label since dataset names are on x-axis
-    plt.ylabel(property_name, fontsize=12)
+    plt.xlabel('', fontsize=14)  # Empty label since dataset names are on x-axis
+    plt.ylabel(property_name, fontsize=14)
     plt.title(f"Boxplot Comparison - {property_name}", fontsize=14)
     
     # Add legend only if target values exist
@@ -1139,8 +680,11 @@ if __name__ == "__main__":
 # python compare_mof_results.py \
 #     --original-data ../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune/train.csv \
 #     --finetune-data mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/finetune_inference/placeholder_generations.csv \
-#     --rl-data mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/rl_mean_inference/mof_gpt_pretrain_best_RL_best_generations.csv \
-#     --output-dir comparison
+#     --rl-data mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/rl_mean_inference/mof_gpt_pretrain_best_RL_best_generations.csv mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/rl_mean_plus_1std_inference/mof_gpt_pretrain_best_RL_best_generations.csv mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/rl_mean_plus_2std_inference/mof_gpt_pretrain_best_RL_best_generations.csv\
+#     --output-dir comparison2 \
+#     --rl-names "mean" "mean_plus_1std" "mean_plus_2std" \
+#     --stats-json mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/analysis/stats.json
+
 
 
 # python compare_mof_results.py \

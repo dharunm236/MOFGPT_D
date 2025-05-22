@@ -580,23 +580,23 @@ def run_pipeline_for_dataset(dataset_folder, args):
         if args.continue_on_failure:
             print("Fine-tuned inference failed. Proceeding to RL training anyway.")
             # Create a placeholder CSV if needed for later stages
-            if not finetune_csv:
-                print("Creating placeholder inference results from training data...")
-                try:
-                    train_df = pd.read_csv(train_data_path, header=None)
-                    placeholder_df = pd.DataFrame({
-                        'id': range(min(len(train_df), args.num_generations)),
-                        'mof': train_df.iloc[:args.num_generations, 0].values,
-                        'target_1': train_df.iloc[:args.num_generations, args.property_col].values
-                    })
-                    finetune_csv = f"{output_dir}/finetune_inference/placeholder_generations.csv"
-                    os.makedirs(os.path.dirname(finetune_csv), exist_ok=True)
-                    placeholder_df.to_csv(finetune_csv, index=False)
-                    print(f"Created placeholder at {finetune_csv}")
-                except Exception as e:
-                    print(f"Error creating placeholder: {str(e)}")
-                    if not args.continue_on_failure:
-                        return False
+            # if not finetune_csv:
+            #     print("Creating placeholder inference results from training data...")
+            #     try:
+            #         train_df = pd.read_csv(train_data_path, header=None)
+            #         placeholder_df = pd.DataFrame({
+            #             'id': range(min(len(train_df), args.num_generations)),
+            #             'mof': train_df.iloc[:args.num_generations, 0].values,
+            #             'target_1': train_df.iloc[:args.num_generations, args.property_col].values
+            #         })
+            #         finetune_csv = f"{output_dir}/finetune_inference/placeholder_generations.csv"
+            #         os.makedirs(os.path.dirname(finetune_csv), exist_ok=True)
+            #         placeholder_df.to_csv(finetune_csv, index=False)
+            #         print(f"Created placeholder at {finetune_csv}")
+            #     except Exception as e:
+            #         print(f"Error creating placeholder: {str(e)}")
+            #         if not args.continue_on_failure:
+            #             return False
         else:
             print("Fine-tuned inference failed. Exiting.")
             sys.exit(1)

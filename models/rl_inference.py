@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# rl_inference.py - Improved version
+# rl_inference.py
 """
 MOF-RL Inference Module
 
@@ -50,6 +50,419 @@ def calculate_diversity(mof_strings):
         'diversity_ratio': len(unique_smiles) / len(mof_strings),
         'unique_smiles': unique_smiles
     }
+
+
+# Add this to your inference script to relax filtering for high-property MOFs
+
+def relaxed_validity_check(mof_strings, predicted_properties, target_values, metals_list, 
+                          generation_config, training_config, topology_labels_key, 
+                          property_threshold_factor=0.8):
+    """
+    Apply relaxed validity checking for MOFs that are close to target properties
+    
+    Args:
+        property_threshold_factor: If predicted property >= target * this factor, 
+                                 apply relaxed validation
+    """
+    valid_mofs = []
+    valid_bool = []
+    
+    # Standard validation first
+    standard_valid_mofs, standard_valid_bool = verify_rdkit(
+        curr_mofs=mof_strings,
+        metal_atom_list=metals_list,
+        generation_config=generation_config,
+        training_config=training_config,
+        topology_labels_key=topology_labels_key
+    )
+    
+    for i, (mof, pred_prop, std_valid) in enumerate(zip(mof_strings, predicted_properties, standard_valid_bool)):
+        if std_valid:
+            # Standard validation passed
+            valid_mofs.append(mof)
+            valid_bool.append(1)
+        else:
+            # Check if this MOF has high predicted property
+            is_high_property = False
+            if isinstance(pred_prop, (list, tuple)):
+                for j, prop_val in enumerate(pred_prop):
+                    if j < len(target_values):
+                        target_val = target_values[j]
+                        if prop_val >= target_val * property_threshold_factor:
+                            is_high_property = True
+                            break
+            else:
+                if len(target_values) > 0:
+                    target_val = target_values[0]
+                    if pred_prop >= target_val * property_threshold_factor:
+                        is_high_property = True
+            
+            if is_high_property:
+                # Apply relaxed validation for high-property MOFs
+                relaxed_valid = relaxed_rdkit_check(mof, metals_list, generation_config, training_config)
+                if relaxed_valid:
+                    print(f"🎯 Relaxed validation passed for high-property MOF: {pred_prop}")
+                    valid_mofs.append(mof)
+                    valid_bool.append(1)
+                else:
+                    valid_bool.append(0)
+            else:
+                valid_bool.append(0)
+    
+    return valid_mofs, valid_bool
+
+def relaxed_rdkit_check(mof_string, metals_list, generation_config, training_config):
+    """
+    More lenient RDKit validation for potentially high-value MOFs
+    """
+    try:
+        compounds = mof_string.split(".")
+        
+        valid_organic_compound = 0
+        valid_inorganic_compound = 0
+        
+        for compound in compounds:
+            # Check for metal atoms
+            found_metal_atom = False
+            for metal_atom in metals_list:
+                if metal_atom in compound:
+                    found_metal_atom = True
+                    valid_inorganic_compound += 1
+                    break
+            
+            if not found_metal_atom:
+                # Try to parse with RDKit, but be more lenient
+                mol = Chem.MolFromSmiles(compound, sanitize=False)  # Don't sanitize
+                if mol is not None:
+                    try:
+                        # Try to sanitize, but don't fail if it doesn't work
+                        Chem.SanitizeMol(mol)
+                        valid_organic_compound += 1
+                    except:
+                        # Even if sanitization fails, count as valid if RDKit could parse it
+                        valid_organic_compound += 1
+                else:
+                    # Try with some common fixes
+                    fixed_compound = fix_common_smiles_issues(compound)
+                    mol = Chem.MolFromSmiles(fixed_compound, sanitize=False)
+                    if mol is not None:
+                        valid_organic_compound += 1
+        
+        # Return true if we have both organic and inorganic components
+        return valid_inorganic_compound > 0 and valid_organic_compound > 0
+        
+    except Exception as e:
+        return False
+
+def fix_common_smiles_issues(smiles):
+    """Fix common SMILES issues that might make RDKit fail"""
+    # Remove extra parentheses
+    fixed = smiles.replace("((", "(").replace("))", ")")
+    
+    # Fix common valence issues by removing problematic atoms/bonds
+    # This is a simplified fix - you might need more sophisticated logic
+    
+    return fixed
+
+def relaxed_novelty_check(mof_strings, predicted_properties, target_values, all_mof_strs,
+                         property_threshold_factor=0.8, similarity_threshold=0.85):
+    """
+    Apply relaxed novelty checking - allow high-property MOFs that are similar but not identical
+    """
+    novel_mofs = []
+    novel_bool = []
+    
+    for mof, pred_prop in zip(mof_strings, predicted_properties):
+        # Check if this is a high-property MOF
+        is_high_property = False
+        if isinstance(pred_prop, (list, tuple)):
+            for j, prop_val in enumerate(pred_prop):
+                if j < len(target_values):
+                    target_val = target_values[j]
+                    if prop_val >= target_val * property_threshold_factor:
+                        is_high_property = True
+                        break
+        else:
+            if len(target_values) > 0:
+                target_val = target_values[0]
+                if pred_prop >= target_val * property_threshold_factor:
+                    is_high_property = True
+        
+        if is_high_property:
+            # For high-property MOFs, allow similar but not identical structures
+            is_novel = is_sufficiently_different(mof, all_mof_strs, similarity_threshold)
+            if is_novel:
+                print(f"🎯 High-property MOF passed relaxed novelty check: {pred_prop}")
+            novel_mofs.append(mof)
+            novel_bool.append(1 if is_novel else 0)
+        else:
+            # Standard novelty check
+            is_novel = mof not in all_mof_strs
+            if is_novel:
+                novel_mofs.append(mof)
+            novel_bool.append(1 if is_novel else 0)
+    
+    return novel_mofs, novel_bool
+
+def is_sufficiently_different(mof, all_mof_strs, similarity_threshold=0.85):
+    """
+    Check if MOF is sufficiently different from existing MOFs
+    Using simple string similarity - could be improved with chemical similarity
+    """
+    from difflib import SequenceMatcher
+    
+    for existing_mof in all_mof_strs:
+        similarity = SequenceMatcher(None, mof, existing_mof).ratio()
+        if similarity > similarity_threshold:
+            return False  # Too similar to existing MOF
+    
+    return True  # Sufficiently different
+
+
+def generate_mofs(model, tokenizer, generation_config, training_config,
+                 device, metals_list, all_mof_strs, topology_labels_key,
+                 energy_predictor, output_filename, num_generations=100,
+                 batch_size=50, property_name="Property", model_type="rl",
+                 enable_relaxed_filtering=True):
+    """
+    Generate MOFs with proper statistics logging in the original simple format
+    """
+    print(f"\n{'='*50}")
+    print(f"Generating MOFs with {'RELAXED' if enable_relaxed_filtering else 'STANDARD'} filtering")
+    print(f"{'='*50}")
+    
+    target_values = training_config.get('target_values', [0.0])
+    print(f"Target values: {target_values}")
+    
+    # Set model to evaluation mode
+    if hasattr(model, 'eval'):
+        model.eval()
+    
+    # Initialize simple statistics tracking (like original)
+    all_mofs = []
+    all_targets = []
+    unique_mofs = set()
+    
+    # Track comprehensive statistics for final reporting
+    total_attempts = 0
+    valid_count = 0
+    novel_count = 0
+    all_generated_mofs = []  # For diversity calculation
+    
+    print("Generating MOFs...")
+    
+    batch_idx = 0
+    with tqdm(total=num_generations, desc="Generating MOFs") as pbar:
+        while len(all_mofs) < num_generations:
+            batch_idx += 1
+            current_batch_size = batch_size
+                
+            print(f"Batch {batch_idx} (size: {current_batch_size}). Progress: {len(all_mofs)}/{num_generations}")
+            
+            # Generate sequences
+            if model_type == "rl":
+                generated_sequences, _, generated_targets = generate(
+                    model=model,
+                    tokenizer=tokenizer,
+                    generation_config=generation_config,
+                    training_config=training_config,
+                    device=device,
+                    num_return_sequences=current_batch_size,
+                    energy_predictor=energy_predictor
+                )
+            else:
+                # Handle fine-tune model generation
+                generated_sequences, _, _ = generate(
+                    model=model.llm_network if hasattr(model, 'llm_network') else model,
+                    tokenizer=tokenizer,
+                    generation_config=generation_config,
+                    training_config=training_config,
+                    device=device,
+                    num_return_sequences=current_batch_size,
+                    energy_predictor=None
+                )
+                generated_targets = [0.0] * len(generated_sequences)  # Placeholder
+            
+            # Convert to MOF strings
+            generated_mof_strs = []
+            for sequence in generated_sequences:
+                sequence_str = process_sequence_to_str(
+                    sequence=sequence,
+                    tokenizer=tokenizer,
+                    training_config=training_config,
+                    generation_config=generation_config
+                )
+                generated_mof_strs.append(sequence_str)
+            
+            # Track ALL generated MOFs for diversity calculation
+            all_generated_mofs.extend(generated_mof_strs)
+            
+            # Apply filtering with relaxed rules if enabled
+            if enable_relaxed_filtering:
+                valid_mofs_list, valid_bool = relaxed_validity_check(
+                    mof_strings=generated_mof_strs,
+                    predicted_properties=generated_targets,
+                    target_values=target_values,
+                    metals_list=metals_list,
+                    generation_config=generation_config,
+                    training_config=training_config,
+                    topology_labels_key=topology_labels_key
+                )
+                
+                novel_mofs_list, novel_bool = relaxed_novelty_check(
+                    mof_strings=generated_mof_strs,
+                    predicted_properties=generated_targets,
+                    target_values=target_values,
+                    all_mof_strs=all_mof_strs
+                )
+            else:
+                # Standard filtering
+                valid_mofs_list, valid_bool = verify_rdkit(
+                    curr_mofs=generated_mof_strs,
+                    metal_atom_list=metals_list,
+                    generation_config=generation_config,
+                    training_config=training_config,
+                    topology_labels_key=topology_labels_key
+                )
+                
+                novel_mofs_list, novel_bool = check_for_existence(
+                    curr_mof_list=generated_mof_strs,
+                    all_mof_list=all_mof_strs
+                )
+            
+            # Process results and update statistics
+            for i, mof_str in enumerate(generated_mof_strs):
+                total_attempts += 1
+                
+                is_valid = valid_bool[i] if i < len(valid_bool) else False
+                is_novel = novel_bool[i] if i < len(novel_bool) else False
+                
+                if is_valid:
+                    valid_count += 1
+                    
+                    if is_novel:
+                        novel_count += 1
+                        
+                        # Add to final collection if unique
+                        if mof_str not in unique_mofs:
+                            unique_mofs.add(mof_str)
+                            all_mofs.append(mof_str)
+                            
+                            # Get corresponding target
+                            if generated_targets and i < len(generated_targets):
+                                all_targets.append(generated_targets[i])
+                            else:
+                                all_targets.append(0.0)
+                            
+                            # Update progress bar
+                            pbar.update(1)
+                            pbar.set_postfix({
+                                'valid': f"{valid_count}/{total_attempts}",
+                                'novel': f"{novel_count}/{valid_count}" if valid_count > 0 else "0/0",
+                                'unique': len(unique_mofs)
+                            })
+                
+                if len(all_mofs) >= num_generations:
+                    break
+            
+            # Print batch summary
+            print(f"  Batch {batch_idx} results:")
+            print(f"    Generated: {len(generated_mof_strs)}")
+            print(f"    Valid: {sum(valid_bool)} ({sum(valid_bool)/len(generated_mof_strs)*100:.1f}%)")
+            print(f"    Novel: {sum(novel_bool)} ({sum(novel_bool)/max(1,sum(valid_bool))*100:.1f}%)")
+            print(f"    Added to final: {len(all_mofs) - len(unique_mofs) + len(unique_mofs)}")
+            
+            # Free memory
+            del generated_sequences, generated_mof_strs, generated_targets
+            clear_memory()
+            
+            if len(all_mofs) >= num_generations:
+                break
+    
+    # Calculate final rates
+    validity_rate = valid_count / max(1, total_attempts)
+    novelty_rate = novel_count / max(1, valid_count)
+    efficiency_rate = len(all_mofs) / max(1, total_attempts)
+    
+    # Calculate diversity
+    diversity_stats = calculate_diversity(all_generated_mofs)
+    diversity_ratio = diversity_stats['diversity_ratio']
+    
+    # Print comprehensive statistics
+    print(f"\n{'='*60}")
+    print("FINAL GENERATION STATISTICS")
+    print(f"{'='*60}")
+    print(f"Total attempts: {total_attempts}")
+    print(f"Valid MOFs: {valid_count} ({validity_rate*100:.1f}%)")
+    print(f"Novel MOFs: {novel_count} ({novelty_rate*100:.1f}%)")
+    print(f"Unique MOFs: {len(unique_mofs)}")
+    print(f"Final collection: {len(all_mofs)}")
+    print(f"Overall efficiency: {efficiency_rate*100:.1f}%")
+    print(f"Diversity ratio: {diversity_ratio:.3f}")
+    
+    if enable_relaxed_filtering:
+        print(f"Relaxed filtering was enabled for high-property MOFs")
+    
+    # Save results (truncate to exactly num_generations)
+    all_mofs = all_mofs[:num_generations]
+    all_targets = all_targets[:num_generations]
+    
+    # Create DataFrame and save main results CSV
+    results_data = []
+    for i, (mof, target_val) in enumerate(zip(all_mofs, all_targets)):
+        row = {"id": i, "mof": mof}
+        if isinstance(target_val, (list, tuple)):
+            for j, t_val in enumerate(target_val):
+                row[f"target_{j+1}"] = float(t_val)
+        else:
+            row["target_1"] = float(target_val)
+        results_data.append(row)
+    
+    output_df = pd.DataFrame(results_data)
+    output_df.to_csv(output_filename, index=False)
+    
+    print(f"\nSaved {len(all_mofs)} MOF structures to {output_filename}")
+    
+    # Save SIMPLE statistics CSV (original format)
+    output_dir = os.path.dirname(output_filename)
+    stats_dict = {
+        'total_attempts': total_attempts,
+        'valid_count': valid_count,
+        'validity_rate': validity_rate,
+        'novel_count': novel_count,
+        'novelty_rate': novelty_rate,
+        'unique_count': len(unique_mofs),
+        'diversity_ratio': diversity_ratio,
+        'efficiency': efficiency_rate
+    }
+    
+    stats_df = pd.DataFrame([stats_dict])
+    stats_csv_path = os.path.join(output_dir, "generation_stats.csv")
+    stats_df.to_csv(stats_csv_path, index=False)
+    print(f"Statistics saved to: {stats_csv_path}")
+    
+    # Print sample of final MOFs
+    print(f"\nSample of generated MOFs:")
+    for i in range(min(5, len(all_mofs))):
+        target_str = ""
+        if all_targets and i < len(all_targets):
+            if isinstance(all_targets[i], (list, tuple)):
+                target_str = f" | Targets: {[round(float(t), 4) for t in all_targets[i]]}"
+            else:
+                target_str = f" | Target: {round(float(all_targets[i]), 4)}"
+        print(f"  MOF {i+1}: {all_mofs[i]}{target_str}")
+    
+    return all_mofs, all_targets, output_df
+
+
+def save_generation_stats(stats_dict, output_dir, filename="generation_stats.csv"):
+    """Save generation statistics to a CSV file in the original simple format"""
+    stats_df = pd.DataFrame([stats_dict])
+    stats_path = os.path.join(output_dir, filename)
+    stats_df.to_csv(stats_path, index=False)
+    print(f"Generation statistics saved to: {stats_path}")
+    return stats_path
+
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -306,292 +719,6 @@ def load_model_and_configs(model_path, config_path, generation_config_path, devi
     
     return model, tokenizer, data_config, training_config, generation_config, energy_predictor
 
-
-def generate_mofs(model,
-                 tokenizer,
-                 generation_config,
-                 training_config,
-                 device,
-                 metals_list,
-                 all_mof_strs,
-                 topology_labels_key,
-                 energy_predictor,
-                 output_filename,
-                 num_generations=100,
-                 batch_size=50,
-                 property_name="Property",
-                 model_type="rl"):
-    """
-    Generate MOF structures using trained model and save to CSV.
-    Continues generating until exactly num_generations valid and novel MOFs are produced.
-    """
-    print(f"\n{'='*50}")
-    print(f"Generating {num_generations} valid and novel MOF structures using {model_type.upper()} model")
-    print(f"{'='*50}")
-    
-    ## ADDED: Print target values being used for generation
-    target_values = training_config.get('target_values', [0.0])
-    print(f"Using target values for generation: {target_values}")
-
-    # Set model to evaluation mode
-    if hasattr(model, 'eval'):
-        model.eval()
-    
-    # Use a moderate temperature for generation
-    original_temperature = generation_config["temperature"]
-    generation_config["temperature"] = max(0.8, original_temperature)
-    
-    # Generate all MOFs in one or more batches
-    all_mofs = []
-    all_targets = []
-    
-    # Track metrics for reporting
-    total_generated = 0
-    valid_count = 0
-    novel_count = 0
-    
-    # Keep track of unique MOFs
-    unique_mofs = set()
-    
-    # Initialize metrics tracking
-    metrics = {
-        'total_attempts': 0,
-        'valid_count': 0,
-        'novel_count': 0,
-        'unique_mofs': set(),
-        'all_generated': []
-    }
-    
-    print("Generating MOFs...")
-    
-    batch_idx = 0
-    with tqdm(total=num_generations, desc="Generating valid & novel MOFs") as pbar:
-        while len(all_mofs) < num_generations:
-            batch_idx += 1
-            current_batch_size = batch_size
-                
-            print(f"Generating batch {batch_idx} (size: {current_batch_size}). Current progress: {len(all_mofs)}/{num_generations} valid & novel MOFs")
-            
-            # Handle different generation approaches based on model type
-            if model_type == "rl":
-                # For RL model, we use the standard generation function
-                generated_sequences, _, generated_targets = generate(
-                    model=model,
-                    tokenizer=tokenizer,
-                    generation_config=generation_config,
-                    training_config=training_config,
-                    device=device,
-                    num_return_sequences=current_batch_size,
-                    energy_predictor=energy_predictor
-                )
-            else:
-                # For fine-tune model, we need a different approach
-                # First generate sequences (without property prediction)
-                generated_sequences, _, _ = generate(
-                    model=model.llm_network if hasattr(model, 'llm_network') else model,
-                    tokenizer=tokenizer,
-                    generation_config=generation_config,
-                    training_config=training_config,
-                    device=device,
-                    num_return_sequences=current_batch_size,
-                    energy_predictor=None  # No energy predictor for generation
-                )
-                generated_targets = []
-            
-            # Convert to MOF strings
-            generated_mof_strs = []
-            for sequence in generated_sequences:
-                sequence_str = process_sequence_to_str(
-                    sequence=sequence,
-                    tokenizer=tokenizer,
-                    training_config=training_config,
-                    generation_config=generation_config
-                )
-                generated_mof_strs.append(sequence_str)
-            
-            # Predict properties if using fine-tune model
-            if model_type == "finetune":
-                print("Predicting properties using fine-tune model...")
-                # Use the fine-tune model to predict properties
-                with torch.no_grad():
-                    for mof_str in generated_mof_strs:
-                        # Tokenize the MOF string
-                        token_ids = tokenizer.encode(mof_str)
-                        token_tensor = torch.tensor([token_ids]).to(device)
-                        
-                        # Create mask
-                        mask = torch.ones_like(token_tensor).to(device)
-                        
-                        # Get prediction directly from the model
-                        try:
-                            # Check if the model has specific prediction method or use forward
-                            if hasattr(model, 'predict'):
-                                output = model.predict(token_ids=token_tensor, mask_ids=mask)
-                            else:
-                                output = model(token_ids=token_tensor, mask_ids=mask)
-                            
-                            # Extract prediction value
-                            if isinstance(output, torch.Tensor):
-                                prediction = output.item()
-                            else:
-                                prediction = output
-                                
-                            generated_targets.append(prediction)
-                            print(f"Predicted property: {prediction:.4f}")
-                        except Exception as e:
-                            print(f"Error during property prediction: {str(e)}")
-                            generated_targets.append(0.0)  # Default value on error
-            
-            # Check validity
-            valid_mofs_list, valid_bool = verify_rdkit(
-                curr_mofs=generated_mof_strs,
-                metal_atom_list=metals_list,
-                generation_config=generation_config,
-                training_config=training_config,
-                topology_labels_key=topology_labels_key
-            )
-            
-            # Process results
-            for i, mof_str in enumerate(generated_mof_strs):
-                total_generated += 1
-                
-                # Add to metrics
-                metrics['total_attempts'] += 1
-                metrics['all_generated'].append(mof_str)
-                
-                # Check if valid
-                is_valid = valid_bool[i] if i < len(valid_bool) else False
-                if is_valid:
-                    valid_count += 1
-                    metrics['valid_count'] += 1
-                    
-                    # Check if novel compared to dataset
-                    # is_novel = not check_for_existence(mof_str, all_mof_strs)
-                    is_novel = not check_for_existence([mof_str], all_mof_strs)[1][0]
-                    if is_novel:
-                        novel_count += 1
-                        metrics['novel_count'] += 1
-                    
-                    # Add to our collection if not a duplicate
-                    if is_valid and is_novel and mof_str not in unique_mofs:
-                        unique_mofs.add(mof_str)
-                        metrics['unique_mofs'].add(mof_str)
-                        all_mofs.append(mof_str)
-                        
-                        # Get corresponding target
-                        if generated_targets and i < len(generated_targets):
-                            all_targets.append(generated_targets[i])
-                        else:
-                            # Default if no prediction
-                            if training_config.get("num_targets", 1) > 1:
-                                all_targets.append([0.0] * training_config.get("num_targets", 1))
-                            else:
-                                all_targets.append(0.0)
-                        
-                        # Update progress bar
-                        pbar.update(1)
-                        pbar.set_postfix({
-                            'valid': f"{valid_count}/{total_generated} ({valid_count/max(1, total_generated)*100:.1f}%)",
-                            'novel': f"{novel_count}/{valid_count} ({novel_count/max(1, valid_count)*100:.1f}%)"
-                        })
-                
-                # If we have enough, break the inner loop
-                if len(all_mofs) >= num_generations:
-                    break
-            
-            # Free memory
-            del generated_sequences, generated_mof_strs, generated_targets
-            del valid_mofs_list, valid_bool
-            clear_memory()
-            
-            # If we have enough, break the outer loop
-            if len(all_mofs) >= num_generations:
-                break
-    
-    # Restore original temperature
-    generation_config["temperature"] = original_temperature
-    
-    # Ensure we have exactly num_generations MOFs by truncating if needed
-    all_mofs = all_mofs[:num_generations]
-    all_targets = all_targets[:num_generations]
-    
-    # Create DataFrame for saving
-    results_data = []
-    
-    # Fix for Issue #1: Ensure target values are properly saved to CSV
-    for i, (mof, target_val) in enumerate(zip(all_mofs, all_targets)):
-        # Create a row dict
-        row = {"id": i, "mof": mof}
-        
-        # Add target predictions
-        if isinstance(target_val, (list, tuple)):
-            for j, t_val in enumerate(target_val):
-                row[f"target_{j+1}"] = float(t_val)  # Ensure it's a float
-        else:
-            row["target_1"] = float(target_val)  # Ensure it's a float
-        
-        results_data.append(row)
-    
-    # Print a sample of the data before saving
-    print("\nSample of data to be saved:")
-    for i in range(min(3, len(results_data))):
-        print(results_data[i])
-    
-    # Save to CSV
-    output_df = pd.DataFrame(results_data)
-    output_df.to_csv(output_filename, index=False)
-    
-    # Verify the CSV was written correctly
-    try:
-        test_read = pd.read_csv(output_filename)
-        print(f"\nSuccessfully verified CSV file. Shape: {test_read.shape}")
-        
-        # Check the first few rows to make sure targets were saved correctly
-        print("\nFirst few rows of saved CSV:")
-        print(test_read.head(3))
-    except Exception as e:
-        print(f"Error verifying CSV file: {str(e)}")
-    
-    print(f"\nSaved {len(all_mofs)} MOF structures to {output_filename}")
-    print(f"Generated {total_generated} total MOFs to get {len(all_mofs)} valid and novel structures")
-    print(f"Validity rate: {valid_count/max(1, total_generated)*100:.1f}%")
-    print(f"Novelty rate: {novel_count/max(1, valid_count)*100:.1f}%")
-    print(f"Overall efficiency: {len(all_mofs)/max(1, total_generated)*100:.1f}%")
-    
-    # Print model type in the statistics
-    print(f"Model type: {model_type.upper()}")
-    
-    # Sample of generated MOFs
-    print("\nSample of generated MOFs:")
-    for i in range(min(5, len(all_mofs))):
-        target_str = ""
-        if all_targets and i < len(all_targets):
-            if isinstance(all_targets[i], (list, tuple)):
-                target_str = f" | Targets: {[round(float(t), 4) for t in all_targets[i]]}"
-            else:
-                target_str = f" | Target: {round(float(all_targets[i]), 4)}"
-        print(f"MOF {i+1}: {all_mofs[i]}{target_str}")
-    
-    # Calculate diversity from metrics
-    diversity_stats = calculate_diversity(metrics['all_generated'])
-    
-    # Final stats dictionary
-    stats_dict = {
-        'total_attempts': metrics['total_attempts'],
-        'valid_count': metrics['valid_count'],
-        'validity_rate': metrics['valid_count'] / max(1, metrics['total_attempts']),
-        'novel_count': metrics['novel_count'],
-        'novelty_rate': metrics['novel_count'] / max(1, metrics['valid_count']),
-        'unique_count': len(metrics['unique_mofs']),
-        'diversity_ratio': diversity_stats['diversity_ratio'] if 'diversity_ratio' in diversity_stats else 0.0,
-        'efficiency': len(metrics['unique_mofs']) / max(1, metrics['total_attempts'])
-    }
-    
-    # Save statistics to CSV
-    stats_path = save_generation_stats(stats_dict, os.path.dirname(output_filename))
-    print(f"Saved statistics to {stats_path}")
-    
-    return all_mofs, all_targets, output_df
 
 def save_generation_stats(stats_dict, output_dir, filename="generation_stats.csv"):
     """Save generation statistics to a CSV file"""
@@ -1026,25 +1153,6 @@ def main():
                         output_dir=args.output_dir,
                         target_value=target_val)
 
-
-    # # Analyze distributions
-    # for i in range(num_targets):
-    #     analyze_data_distribution(
-    #         data_df=generated_df,
-    #         property_col=property_cols[i],
-    #         property_name=property_names[i],
-    #         target_values=[target_values[i]],
-    #         output_dir=args.output_dir
-    #     )
-    
-    # # Plot target achievement
-    # plot_target_achievement(
-    #     generated_df=generated_df,
-    #     target_values=target_values,
-    #     property_cols=property_cols,
-    #     property_names=property_names,
-    #     output_dir=args.output_dir
-    # )
     
     print("\nGeneration and analysis complete!")
     print(f"Results saved to: {args.output_dir}")

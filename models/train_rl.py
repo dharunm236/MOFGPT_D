@@ -29,107 +29,60 @@ from modules.experience_replay import ExperienceReplayBuffer
 import random
 
 
-
-def train_one_epoch(base_model_class,
-                    batch_tokens,
-                    batch_reward,
-                    optimizer,
-                    training_config,
-                    device,
-                    scheduler,
-                    epoch,
-                    experience_buffer=None,
-                    scaler=None):
+def train_one_epoch(base_model_class, batch_tokens, batch_reward, optimizer, 
+                         training_config, device, scheduler, epoch, experience_buffer, 
+                         scaler, reward_function, tokenizer=None, generation_config=None):
     """
-    Memory-optimized training for one epoch with batch processing and experience replay
-    
-    Args:
-        base_model_class: Model class wrapper
-        batch_tokens: Batch of token sequences
-        batch_reward: Batch of rewards
-        optimizer: Optimizer
-        training_config: Training configuration
-        device: Device to use
-        scheduler: Learning rate scheduler
-        epoch: Current epoch
-        experience_buffer: Experience replay buffer (optional)
-        scaler: Gradient scaler for mixed precision (optional)
-        
-    Returns:
-        batch_expected_reward: Expected reward for the batch
-        batch_loss: Loss value for the batch
+    Training with curriculum learning from global memory
     """
-    # Set model to training mode
     base_model_class.network.train()
     
-    # Log memory before training
-    # log_gpu_memory("Before training")
+    # Get curriculum examples from global memory
+    curriculum_mofs, curriculum_preds = reward_function.get_curriculum_examples(len(batch_tokens))
     
-    # Determine if we should use experience replay
-    # Only start after a certain number of epochs (prevent catastrophic forgetting)
-    replay_start_epoch = training_config.get("replay_start_epoch", 100)
-    use_replay = (experience_buffer is not None and 
-                training_config.get("use_experience_replay", True) and 
-                epoch >= replay_start_epoch and 
-                len(experience_buffer.buffer) > 0)
-    
-    # Update experience buffer with current batch samples
-    if experience_buffer is not None:
-        added_count = 0
-        for tokens, reward in zip(batch_tokens, batch_reward):
-            if experience_buffer.add_experience(tokens, reward):  # This moves tokens to CPU
-                added_count += 1
+    # If we have curriculum examples, convert them to tokens and add to training
+    if curriculum_mofs and tokenizer is not None and generation_config is not None:
+        print(f"🎓 Adding {len(curriculum_mofs)} curriculum examples to training")
         
-        if added_count > 0:
-            print(f"Added {added_count}/{len(batch_tokens)} experiences to buffer")
-    
-    # Combine current batch with experiences from buffer
-    combined_tokens = batch_tokens.copy()
-    combined_rewards = batch_reward.copy()
-    
-    if use_replay:
-        # Use 30% of batch size for replay samples
-        replay_ratio = training_config.get("replay_ratio", 0.3)
-        replay_size = max(1, int(len(batch_tokens) * replay_ratio))
+        # Convert curriculum MOFs to tokens
+        curriculum_tokens = []
+        for mof in curriculum_mofs:
+            try:
+                tokenized = tokenize_mof_string(mof, tokenizer, training_config, generation_config)
+                if tokenized is not None:
+                    curriculum_tokens.append(tokenized.to(device))
+            except Exception as e:
+                print(f"Error tokenizing curriculum MOF: {e}")
+                continue
         
-        # Sample from buffer (tokens are on CPU)
-        replay_tokens, replay_rewards = experience_buffer.sample_batch(replay_size)
+        # Calculate high rewards for curriculum examples (they're known good examples)
+        curriculum_rewards = [max(batch_reward) * 1.2 for _ in range(len(curriculum_tokens))]  # Use max reward * 1.2
         
-        # Add to combined batch if samples were returned
-        if replay_tokens:
-            # Move replay samples to GPU
-            replay_tokens_gpu = [tokens.to(device) for tokens in replay_tokens]
-            combined_tokens.extend(replay_tokens_gpu)
-            combined_rewards.extend(replay_rewards)
-            
-            print(f"Using experience replay: {len(replay_tokens)} samples from buffer")
-            
-            # Print buffer stats
-            stats = experience_buffer.get_stats()
-            print(f"Buffer stats: size={stats['size']}/{experience_buffer.max_size}, " 
-                  f"mean_reward={stats['mean_reward']:.4f}, "
-                  f"max_reward={stats['max_reward']:.4f}")
-    elif experience_buffer is not None and epoch < replay_start_epoch:
-        print(f"Experience replay will start at epoch {replay_start_epoch} (current: {epoch})")
+        # Combine with current batch
+        combined_tokens = batch_tokens + curriculum_tokens
+        combined_rewards = batch_reward + curriculum_rewards
+        
+        print(f"Training with {len(batch_tokens)} new + {len(curriculum_tokens)} curriculum = {len(combined_tokens)} total examples")
+    else:
+        combined_tokens = batch_tokens
+        combined_rewards = batch_reward
+        if curriculum_mofs:
+            print("⚠️  Curriculum MOFs available but tokenizer/generation_config not provided")
     
-    # Initialize loss and reward accumulators
-    batch_loss = 0.0
-    batch_expected_reward = 0.0
+    # Rest of training logic remains the same...
     batch_size = len(combined_tokens)
-    
-    # Skip if batch is empty
     if batch_size == 0:
         return 0, 0
     
-    # Process in smaller mini-batches to manage memory better
-    mini_batch_size = 8  # Adjust based on your GPU memory
+    mini_batch_size = 8
     optimizer.zero_grad()
+    
+    batch_loss = 0.0
+    batch_expected_reward = 0.0
     
     for mini_batch_idx in range(0, batch_size, mini_batch_size):
         mini_batch_end = min(mini_batch_idx + mini_batch_size, batch_size)
-        curr_mini_batch_size = mini_batch_end - mini_batch_idx
         
-        # Process each sample in the mini-batch
         curr_batch_loss = 0.0
         curr_batch_reward = 0.0
         
@@ -138,171 +91,110 @@ def train_one_epoch(base_model_class,
             reward = combined_rewards[i]
             
             # Calculate discounted returns
-            # Power calculates how much to discount future rewards
-            # Higher powers discount future rewards more
             discounted_returns = (torch.pow(
                 training_config["discount_factor"],
                 torch.arange(tokens.shape[1]-1, 0, -1).to(device)
             ) * reward)
             
-            # Prepare inputs for model
             attention_mask = torch.ones_like(tokens).to(device)
             
-            # Ensure tokens are on the correct device and type
             if tokens.device != device:
                 tokens = tokens.to(device)
             tokens = tokens.type(torch.LongTensor).to(device)
             
             target_token_ids = tokens.clone()
             
-            # Forward pass
-            # with autocast(enabled=training_config['fp16']):
             with autocast(device_type='cuda', enabled=training_config['fp16']):
                 y_hat = base_model_class.forward(
-                    tokens,
-                    attention_mask,
-                    target_token_ids,
-                    training_config['fp16']
+                    tokens, attention_mask, target_token_ids, training_config['fp16']
                 )
                 
-                # Get logits and apply softmax
                 logits = y_hat.logits
-                logits = logits[:, :-1, :]  # Remove last token prediction
+                logits = logits[:, :-1, :]
                 logits = logits.squeeze(0)
                 log_preds = F.log_softmax(logits, dim=1)
                 
-                # Get indices of chosen tokens
                 idxs = tokens[0, 1:].view(-1, 1)
-                
-                # Get log probabilities of chosen tokens
                 action_values = log_preds.gather(dim=1, index=idxs).view(-1, 1)
-                
-                # Calculate expected reward (policy gradient)
                 expected_reward = -torch.sum(action_values * discounted_returns.view(-1, 1))
-                
-                # Scale the loss by batch size for gradient accumulation
                 current_loss = expected_reward / batch_size
             
-            # Add to batch totals
             curr_batch_reward += reward
             curr_batch_loss += expected_reward.item()
             
-            # Backward pass for this sample
             if training_config["fp16"] and scaler is not None:
-                # Mixed precision training
                 scaler.scale(current_loss).backward()
             else:
                 current_loss.backward()
             
-            # Free memory for next iteration
             del y_hat, logits, log_preds, action_values, expected_reward
             del attention_mask, target_token_ids, discounted_returns
         
-        # Update batch accumulators
         batch_loss += curr_batch_loss
         batch_expected_reward += curr_batch_reward
-        
-        # Clear memory after each mini-batch
         clear_memory()
     
-    # Average the accumulated values
     batch_loss /= batch_size
     batch_expected_reward /= batch_size
     
-    # Apply gradient clipping to prevent large updates
+    # Gradient clipping and optimization step
     gradient_clip = training_config.get("gradient_clip", 0.0)
     
     if training_config["fp16"] and scaler is not None:
-        # Mixed precision training
         if gradient_clip > 0:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(base_model_class.network.parameters(), gradient_clip)
-            
         scaler.step(optimizer)
         scaler.update()
     else:
-        # Standard training
         if gradient_clip > 0:
             torch.nn.utils.clip_grad_norm_(base_model_class.network.parameters(), gradient_clip)
-            
         optimizer.step()
     
-    # Update learning rate
     if scheduler is not None:
         scheduler.step()
     
-    # Clean up memory
     clear_memory()
-    # log_gpu_memory("After training")
-    
-    # Log training stats
-    print(f"Training stats: loss={batch_loss:.6f}, reward={batch_expected_reward:.4f}")
     
     return batch_expected_reward, batch_loss
 
+def tokenize_mof_string(mof_string, tokenizer, training_config, generation_config):
+    """
+    Convert MOF string back to tokens for curriculum learning
+    """
+    try:
+        # Add special tokens if needed (manually add them to the string)
+        processed_string = mof_string
+        if training_config.get("add_bos_token", True):
+            processed_string = tokenizer.bos_token + processed_string
+        if training_config.get("add_eos_token", True):
+            processed_string = processed_string + tokenizer.eos_token
+        
+        # Tokenize using the custom tokenizer's encode method
+        # MOFTokenizerGPT likely doesn't have add_special_tokens parameter
+        token_ids = tokenizer.encode(processed_string)
+        
+        # Handle case where encode returns a list vs tensor
+        if isinstance(token_ids, list):
+            token_tensor = torch.tensor([token_ids])
+        else:
+            # If it's already a tensor, ensure it has batch dimension
+            if token_ids.dim() == 1:
+                token_tensor = token_ids.unsqueeze(0)
+            else:
+                token_tensor = token_ids
+        
+        # Truncate if too long
+        max_len = generation_config.get("max_seq_len", 512)
+        if token_tensor.shape[1] > max_len:
+            token_tensor = token_tensor[:, :max_len]
+        
+        return token_tensor
+        
+    except Exception as e:
+        print(f"Error in tokenize_mof_string: {e}")
+        return None
 
-
-# def final_test_evaluation(num_targets,
-#                          base_model,
-#                          tokenizer,
-#                          generation_config,
-#                          training_config,
-#                          device,
-#                          topology_labels_key,
-#                          all_mof_strs,
-#                          all_mof_strs_train,
-#                          all_mof_strs_val,
-#                          all_mof_strs_test,
-#                          metals_list,
-#                          energy_predictor,
-#                          reward_function,
-#                          output_filename):
-#     """Run final test evaluation and save generations"""
-#     print("\n" + "="*70)
-#     print("FINAL TEST EVALUATION")
-#     print("="*70)
-    
-#     # First, do a standard evaluation on the test set
-#     test_reward, \
-#     novelty_reward, \
-#     validity_reward, \
-#     diversity_reward, \
-#     target_reward, \
-#     test_avg_predictions = evaluate(
-#         num_targets=num_targets,
-#         base_model=base_model,
-#         tokenizer=tokenizer,
-#         generation_config=generation_config,
-#         training_config=training_config,
-#         device=device,
-#         topology_labels_key=topology_labels_key,
-#         all_mof_strs=all_mof_strs,
-#         all_mof_strs_train=all_mof_strs_train,
-#         all_mof_strs_val=all_mof_strs_val,
-#         all_mof_strs_test=all_mof_strs_test,
-#         metals_list=metals_list,
-#         energy_predictor=energy_predictor,
-#         reward_function=reward_function,
-#         eval_set="test"  # Explicitly use test set
-#     )
-    
-#     # No need to log to WandB for final test - just print results
-    
-#     print("\n" + "="*50)
-#     print("FINAL TEST RESULTS SUMMARY")
-#     print("="*50)
-#     print(f"Total reward: {test_reward:.4f}")
-#     print(f"Novelty score: {novelty_reward:.4f}")
-#     print(f"Validity score: {validity_reward:.4f}")
-#     print(f"Diversity score: {diversity_reward:.4f}")
-#     print(f"Target reward: {target_reward:.4f}")
-    
-#     for i, avg_pred in enumerate(test_avg_predictions):
-#         if avg_pred is not None:
-#             target_val = training_config.get("target_values", [0.0] * num_targets)[i]
-#             print(f"Target {i+1}: value={target_val:.4f}, prediction={avg_pred:.4f}")
- 
-#     return test_reward
 
 
 def evaluate(num_targets,
@@ -966,6 +858,8 @@ def main():
 
     # Store property name in config for consistent reference across modules
     training_config["property_name"] = property_name
+    training_config["curriculum_learning"] = True
+    training_config["progressive_tolerance"] = True
 
 
     if wandb_project and not wandb_project.startswith("#"):
@@ -1067,6 +961,18 @@ def main():
             del batch_sequences
             clear_memory()
         
+        # Print sample of generated MOFs and targets for this training epoch
+        print(f"\nSample generated MOFs for training (epoch {epoch}):")
+        for i in range(min(5, len(generated_mof_strs))):
+            target_str = ""
+            if generated_targets and i < len(generated_targets):
+                if isinstance(generated_targets[i], (list, tuple)):
+                    target_vals = [f"{val:.4f}" for val in generated_targets[i]]
+                    target_str = f" | Targets: [{', '.join(target_vals)}]"
+                else:
+                    target_str = f" | Target: {generated_targets[i]:.4f}"
+            print(f"  MOF {i+1}: {generated_mof_strs[i]}{target_str}")
+        
         # Calculate rewards using the improved reward function
         batch_reward, \
         novelty_reward, \
@@ -1100,6 +1006,11 @@ def main():
         print(f"Validity score: {batch_validity_score:.4f}")
         print(f"Diversity score: {batch_diversity_score:.4f}")
         
+        # Print sample rewards for debugging
+        if len(batch_reward) > 0:
+            print(f"Sample rewards: {[f'{r:.4f}' for r in batch_reward[:3]]}")
+            print(f"Total reward range: {min(batch_reward):.4f} to {max(batch_reward):.4f}")
+        
         # Free memory of unused variables before training
         del generated_mof_strs, novelty_reward, validity_reward, diversity_reward
         clear_memory()
@@ -1112,10 +1023,13 @@ def main():
             optimizer=optimizer,
             training_config=training_config,
             device=device,
-            scaler=scaler,
-            epoch=epoch,
             scheduler=scheduler,
-            experience_buffer=experience_buffer
+            epoch=epoch,
+            experience_buffer=experience_buffer,
+            scaler=scaler,
+            reward_function=reward_function,
+            tokenizer=tokenizer,
+            generation_config=generation_config
         )
         
         # Free large training tensors
@@ -1142,6 +1056,14 @@ def main():
                     avg_predictions.append(None)
             else:
                 avg_predictions.append(None)
+        
+        # Print target prediction summary
+        if any(pred is not None for pred in avg_predictions):
+            print("Target prediction summary:")
+            for i, avg_pred in enumerate(avg_predictions):
+                if avg_pred is not None:
+                    target_val = training_config.get("target_values", [0.0] * num_targets)[i]
+                    print(f"  Target {i+1}: predicted={avg_pred:.4f}, target={target_val:.4f}")
         
         # Log to WandB for every epoch
         if wandb.run is not None:
@@ -1284,32 +1206,6 @@ def main():
     print(f"Training complete! Best validation reward: {max_val_reward:.4f}")
     print("="*70)
 
-    # Generate and save final MOF structures
-    # final_generations_filename = os.path.join(args.output_dir, f"{model_basename}_RL_generations.csv")
-    # final_test_reward = final_test_evaluation(
-    #     num_targets=num_targets,
-    #     base_model=base_model,
-    #     tokenizer=tokenizer,
-    #     generation_config=generation_config,
-    #     training_config=training_config,
-    #     device=device,
-    #     topology_labels_key=topology_labels_key,
-    #     all_mof_strs=all_mof_strs,
-    #     all_mof_strs_train=all_mof_strs_train,
-    #     all_mof_strs_val=all_mof_strs_val,
-    #     all_mof_strs_test=all_mof_strs_test,
-    #     metals_list=metals_list,
-    #     energy_predictor=energy_predictor,
-    #     reward_function=reward_function,
-    #     output_filename=final_generations_filename
-    # )
-
-    # print("\n" + "="*70)
-    # print(f"Final test reward: {final_test_reward:.4f}")
-    # print(f"Final generations saved to: {final_generations_filename}")
-    # print("="*70)
-    
-    # Clean up WandB if it was used
     if wandb.run is not None:
         wandb.finish()
     

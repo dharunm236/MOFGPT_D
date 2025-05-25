@@ -1,12 +1,12 @@
-state_dict_filename: "../saved_models/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt" # "../saved_models/rl_gpt_finetune_with_energy.pt"
+state_dict_filename: "../saved_models/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt"
 do_sample: true # multinomial sampling
 num_beams: 1 # beam search
 early_stopping: true # stop when at least num_beams sentences finished per batch
 num_beam_groups: 1 # diverse beam search
 temperature: 0.7 # temperature sampling
 top_k: 100 # top k sampling for multinomial sampling or any other strategy
-num_return_sequences: 128 # number of sequences to return 
-test_num_return_sequences: 32 # number of sequences to return in test
+num_return_sequences: 32 #128 # number of sequences to return 
+test_num_return_sequences: 16 # number of sequences to return in test
 metals_list_file: "../utils/metals.txt"
 sep_token: "&&"
 max_seq_len: 512

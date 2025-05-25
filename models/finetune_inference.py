@@ -76,15 +76,16 @@ def save_generation_stats(stats_dict, output_dir):
     return stats_path
 
 
-
-def generate_mofs(model, tokenizer, generation_config, device,
-                metals_list, all_mof_strs, output_filename,
-                num_generations=100, batch_size=20, 
-                property_name="Property"):
+def generate_mofs(model, tokenizer, generation_config, training_config,
+                 device, metals_list, all_mof_strs, topology_labels_key,
+                 energy_predictor, output_filename, num_generations=100,
+                 batch_size=20, property_name="Property", **kwargs):
     """
     Generate MOFs while tracking comprehensive statistics
     Returns DataFrame with only MOFs and their property predictions
     """
+    print(f"Starting generation of {num_generations} MOFs...")
+    
     model.eval()
     results = []
     stats = defaultdict(int)
@@ -132,7 +133,8 @@ def generate_mofs(model, tokenizer, generation_config, device,
         for mof, is_valid in zip(mof_strings, valid_flags):
             is_novel = is_valid and not check_for_existence(mof, all_mof_strs)[1][0]
             novel_flags.append(is_novel)
-            stats['novel_count'] += int(is_novel)
+            if is_novel:
+                stats['novel_count'] += 1
         
         # Predict properties for MOFs
         predictions = []
@@ -161,7 +163,7 @@ def generate_mofs(model, tokenizer, generation_config, device,
                 print(f"Prediction error for MOF: {str(e)}")
                 predictions.append(0.0)  # Default on error
         
-        # Save results with predictions - removed is_valid and is_novel
+        # Save results with predictions
         for idx, (mof, pred) in enumerate(zip(mof_strings, predictions)):
             results.append({
                 'id': len(results) + 1,
@@ -197,6 +199,16 @@ def generate_mofs(model, tokenizer, generation_config, device,
     print(f"Overall efficiency: {stats['efficiency']:.1%}")
     
     return df
+
+def save_generation_stats(stats_dict, output_dir, filename="generation_stats.csv"):
+    """Save generation statistics to a CSV file in the original simple format"""
+    stats_df = pd.DataFrame([stats_dict])
+    stats_path = os.path.join(output_dir, filename)
+    stats_df.to_csv(stats_path, index=False)
+    print(f"Generation statistics saved to: {stats_path}")
+    return stats_path
+
+
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -250,201 +262,163 @@ def main():
     device = torch.device(f"cuda:{args.cuda_device}" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    # try:
+    # Load configs
+    with open(args.config, "r") as f:
+        config = yaml.safe_load(f)
+    with open(config["model"]["model_config_filename"], "r") as f:
+        model_config = yaml.safe_load(f)
+    with open(args.generation_config, "r") as f:
+        generation_config = yaml.safe_load(f)
+
+    # Get configs
+    training_config = config["training"]
+    data_config = config["data"]
+    base_model_config = model_config["base_model"]
+    fine_tune_config = model_config.get("fine_tune", {})
+    
+    # Initialize tokenizer
+    tokenizer = MOFTokenizerGPT(
+        vocab_file=data_config["vocab_path"],
+        add_special_tokens=data_config["tokenizer"]["add_special_tokens"],
+        pad_token=data_config["tokenizer"]["pad_token"],
+        mask_token=data_config["tokenizer"]["mask_token"],
+        bos_token=data_config["tokenizer"]["bos_token"],
+        eos_token=data_config["tokenizer"]["eos_token"],
+        unk_token=data_config["tokenizer"]["unk_token"],
+        max_len=data_config["tokenizer"]["max_seq_len"],
+        use_topology=data_config["tokenizer"].get("use_topology", False),
+    )
+    print(f"Tokenizer initialized with use_topology={tokenizer.use_topology}")
+    
+    # Update model configuration
+    base_model_config.update({
+        "vocab_size": tokenizer.vocab_size,
+        "pad_token_id": tokenizer.pad_token_id,
+        "bos_token_id": tokenizer.bos_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+        "ignore_index": data_config.get("ignore_index", -100),
+        "max_position_embeddings": data_config["tokenizer"]["max_seq_len"]
+    })
+    
+    # Initialize model
+    print("Initializing model...")
+    clear_memory()
+    base_model = get_model(config=base_model_config, device=device)
+    model = LLMFineTuneModel(
+        llm_network=base_model,
+        llm_config=base_model_config,
+        fine_tune_config=fine_tune_config,
+        is_fp16=training_config.get('fp16', False)
+    ).to(device)
+    
+    # Load model weights
+    print(f"Loading weights from: {args.model}")
+    checkpoint = torch.load(args.model, map_location=device)
+    
+    # Try different possible state dict keys
+    loaded = False
+    possible_keys = ["model_state_dict", "state_dict", "llm_network.state_dict"]
+    for key in possible_keys:
+        if key in checkpoint:
+            try:
+                model.load_state_dict(checkpoint[key])
+                loaded = True
+                print(f"Model loaded using key: {key}")
+                break
+            except Exception as e:
+                print(f"Failed with key {key}: {str(e)}")
+    
+    if not loaded:
+        raise RuntimeError("Could not load model weights with any known key")
+        
+    # Override temperature if specified
+    if args.temperature is not None:
+        generation_config["temperature"] = args.temperature
+        print(f"Temperature set to {args.temperature}")
+        
+    # Load metals list for RDKit validation
+    with open(generation_config["metals_list_file"], "r") as f:
+        metals_list = [line.strip() for line in f.readlines()]
+    print(f"Loaded {len(metals_list)} metals for validation")
+    
+    # Load existing MOFs for novelty check
+    print("\nLoading existing MOFs for novelty check...")
+    all_mof_strs = []
     try:
-        # Load configs
-        with open(args.config, "r") as f:
-            config = yaml.safe_load(f)
-        with open(config["model"]["model_config_filename"], "r") as f:
-            model_config = yaml.safe_load(f)
-        with open(args.generation_config, "r") as f:
-            generation_config = yaml.safe_load(f)
-
-        # Get configs
-        training_config = config["training"]
-        data_config = config["data"]
-        base_model_config = model_config["base_model"]
-        fine_tune_config = model_config.get("fine_tune", {})
+        train_df = pd.read_csv(data_config["train_csv_filename"])
+        all_mof_strs.extend(train_df.iloc[:, 0].tolist())
+        print(f"Loaded {len(train_df)} training MOFs")
         
-        # Initialize tokenizer
-        tokenizer = MOFTokenizerGPT(
-            vocab_file=data_config["vocab_path"],
-            add_special_tokens=data_config["tokenizer"]["add_special_tokens"],
-            pad_token=data_config["tokenizer"]["pad_token"],
-            mask_token=data_config["tokenizer"]["mask_token"],
-            bos_token=data_config["tokenizer"]["bos_token"],
-            eos_token=data_config["tokenizer"]["eos_token"],
-            unk_token=data_config["tokenizer"]["unk_token"],
-            max_len=data_config["tokenizer"]["max_seq_len"],
-            use_topology=data_config["tokenizer"].get("use_topology", False),
-        )
-        print(f"Tokenizer initialized with use_topology={tokenizer.use_topology}")
+        if "val_csv_filename" in data_config:
+            val_df = pd.read_csv(data_config["val_csv_filename"])
+            all_mof_strs.extend(val_df.iloc[:, 0].tolist())
+            print(f"Loaded {len(val_df)} validation MOFs")
         
-        # Update model configuration
-        base_model_config.update({
-            "vocab_size": tokenizer.vocab_size,
-            "pad_token_id": tokenizer.pad_token_id,
-            "bos_token_id": tokenizer.bos_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
-            "ignore_index": data_config.get("ignore_index", -100),
-            "max_position_embeddings": data_config["tokenizer"]["max_seq_len"]
-        })
-        
-        # Initialize model
-        print("Initializing model...")
-        clear_memory()
-        base_model = get_model(config=base_model_config, device=device)
-        model = LLMFineTuneModel(
-            llm_network=base_model,
-            llm_config=base_model_config,
-            fine_tune_config=fine_tune_config,
-            is_fp16=training_config.get('fp16', False)
-        ).to(device)
-        
-        # Load model weights
-        print(f"Loading weights from: {args.model}")
-        checkpoint = torch.load(args.model, map_location=device)
-        
-        # Try different possible state dict keys
-        loaded = False
-        possible_keys = ["model_state_dict", "state_dict", "llm_network.state_dict"]
-        for key in possible_keys:
-            if key in checkpoint:
-                try:
-                    model.load_state_dict(checkpoint[key])
-                    loaded = True
-                    print(f"Model loaded using key: {key}")
-                    break
-                except Exception as e:
-                    print(f"Failed with key {key}: {str(e)}")
-        
-        if not loaded:
-            raise RuntimeError("Could not load model weights with any known key")
-            
-        # Override temperature if specified
-        if args.temperature is not None:
-            generation_config["temperature"] = args.temperature
-            print(f"Temperature set to {args.temperature}")
-            
-        # Load metals list for RDKit validation
-        with open(generation_config["metals_list_file"], "r") as f:
-            metals_list = [line.strip() for line in f.readlines()]
-        print(f"Loaded {len(metals_list)} metals for validation")
-        
-        # Load existing MOFs for novelty check
-        print("\nLoading existing MOFs for novelty check...")
-        all_mof_strs = []
-        try:
-            train_df = pd.read_csv(data_config["train_csv_filename"])
-            all_mof_strs.extend(train_df.iloc[:, 0].tolist())
-            print(f"Loaded {len(train_df)} training MOFs")
-            
-            if "val_csv_filename" in data_config:
-                val_df = pd.read_csv(data_config["val_csv_filename"])
-                all_mof_strs.extend(val_df.iloc[:, 0].tolist())
-                print(f"Loaded {len(val_df)} validation MOFs")
-            
-            if "test_csv_filename" in data_config:
-                test_df = pd.read_csv(data_config["test_csv_filename"])
-                all_mof_strs.extend(test_df.iloc[:, 0].tolist())
-                print(f"Loaded {len(test_df)} test MOFs")
-        except Exception as e:
-            print(f"Warning: Error loading existing MOFs: {str(e)}")
-        
-        print(f"Total {len(all_mof_strs)} existing MOFs loaded for novelty checking")
-        
-        # Determine output filename
-        if args.output_filename:
-            output_csv = args.output_filename
-        else:
-            model_name = Path(args.model).stem
-            output_csv = os.path.join(args.output_dir, f"{model_name}_generated_{args.num_generations}.csv")
-        
-        dataset_name = os.path.basename(os.path.dirname(data_config["train_csv_filename"]))
-        print(f"Dataset name: {dataset_name}")
-
-        if args.property_name == "Property":  # Only override if default value is used
-            if "QMOF" in dataset_name:
-                args.property_name = "Band Gap (eV)" 
-                print(f"Setting property name to 'Band Gap (eV)' for QMOF dataset")
-            elif "hMOF" in dataset_name:
-                # Attempt to extract gas type and pressure
-                gas_type = "gas"
-                pressure = ""
-                
-                if "CH4" in dataset_name:
-                    gas_type = "CH4"
-                elif "CO2" in dataset_name:
-                    gas_type = "CO2"
-                
-                import re
-                pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
-                if pressure_match:
-                    pressure = pressure_match.group(1)
-                    args.property_name = f"{gas_type} adsorption at {pressure} bar"
-                else:
-                    args.property_name = f"{gas_type} adsorption"
-                
-                print(f"Setting property name to '{args.property_name}' for hMOF dataset")
-        
-        
-        
-        # Generate MOFs
-        results_df = generate_mofs(
-            model=model,
-            tokenizer=tokenizer,
-            generation_config=generation_config,
-            device=device,
-            metals_list=metals_list,
-            all_mof_strs=all_mof_strs,
-            output_filename=output_csv,
-            num_generations=args.num_generations,
-            batch_size=args.batch_size,
-            property_name=args.property_name
-        )
-        
-        print("\nGeneration complete!")
-        print(f"Results saved to: {output_csv}")
-        return 0
-        
+        if "test_csv_filename" in data_config:
+            test_df = pd.read_csv(data_config["test_csv_filename"])
+            all_mof_strs.extend(test_df.iloc[:, 0].tolist())
+            print(f"Loaded {len(test_df)} test MOFs")
     except Exception as e:
-        print(f"\nERROR: {str(e)}")
-        traceback.print_exc()
-        
-        # Create emergency output file if something went wrong
-        emergency_df = pd.DataFrame({
-            'id': [1],
-            'mof': ['CC1=CC=CC=C1'],  # Simple benzene as placeholder
-            'is_valid': [False],
-            'is_novel': [False],
-            'target_1': [0.0]
-        })
-        
-        if args.output_filename:
-            emergency_path = args.output_filename
-        else:
-            emergency_path = os.path.join(args.output_dir, "emergency_output.csv")
-        
-        emergency_df.to_csv(emergency_path, index=False)
-        print(f"\nEmergency output saved to: {emergency_path}")
-        return 1
+        print(f"Warning: Error loading existing MOFs: {str(e)}")
+    
+    print(f"Total {len(all_mof_strs)} existing MOFs loaded for novelty checking")
+    
+    # Determine output filename
+    if args.output_filename:
+        output_csv = args.output_filename
+    else:
+        model_name = Path(args.model).stem
+        output_csv = os.path.join(args.output_dir, f"{model_name}_generated_{args.num_generations}.csv")
+    
+    dataset_name = os.path.basename(os.path.dirname(data_config["train_csv_filename"]))
+    print(f"Dataset name: {dataset_name}")
+
+    if args.property_name == "Property":  # Only override if default value is used
+        if "QMOF" in dataset_name:
+            args.property_name = "Band Gap (eV)" 
+            print(f"Setting property name to 'Band Gap (eV)' for QMOF dataset")
+        elif "hMOF" in dataset_name:
+            # Attempt to extract gas type and pressure
+            gas_type = "gas"
+            pressure = ""
+            
+            if "CH4" in dataset_name:
+                gas_type = "CH4"
+            elif "CO2" in dataset_name:
+                gas_type = "CO2"
+            
+            import re
+            pressure_match = re.search(r'(\d+\.\d+)', dataset_name)
+            if pressure_match:
+                pressure = pressure_match.group(1)
+                args.property_name = f"{gas_type} adsorption at {pressure} bar"
+            else:
+                args.property_name = f"{gas_type} adsorption"
+            
+            print(f"Setting property name to '{args.property_name}' for hMOF dataset")
+    
+    
+    
+    # Generate MOFs
+    results_df = generate_mofs(
+        model=model,
+        tokenizer=tokenizer,
+        generation_config=generation_config,
+        device=device,
+        metals_list=metals_list,
+        all_mof_strs=all_mof_strs,
+        output_filename=output_csv,
+        num_generations=args.num_generations,
+        batch_size=args.batch_size,
+        property_name=args.property_name,
+        training_config=training_config, 
+        topology_labels_key=None,      
+        energy_predictor=None  
+    )
+    
+    print("\nGeneration complete!")
+    print(f"Results saved to: {output_csv}")
 
 if __name__ == "__main__":
     sys.exit(main())
-
-# python finetune_inference.py \
-#     --model ./mofgpt_hMOF_CH4_2.5_small_mofid_finetune_pipeline_results/finetune/mofgpt_hMOF_CH4_0.5_small_mofid_finetune_best.pt \
-#     --config ../config/config_finetune.yaml \
-#     --generation-config ../config/config_generate.yaml \
-#     --num-generations 100 \
-#     --batch-size 20 \
-#     --output-dir ./results
-
-
-
-
-# # python finetune_inference.py --model ./mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/finetune/mofgpt_hMOF_CH4_0.5_small_mofid_finetune_best.pt \
-# #                                       --config ../config/config_finetune.yaml \
-# #                                       --generation-config ../config/config_generate.yaml \
-# #                                       --num-generations 100 \
-# #                                       --batch-size 20 \
-# #                                       --output-dir ./results

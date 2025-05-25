@@ -581,25 +581,6 @@ def main():
         try:
             with open(args.stats_json, 'r') as f:
                 stats = json.load(f)
-            
-            # # Add key target values
-            # target_keys = ["mean", "mean_plus_1std", "mean_plus_2std", "mean_minus_1std"]
-            # for key in target_keys:
-            #     if key in stats:
-            #         target_values[key.replace("_", " ").title()] = stats[key]
-
-            # # Match target value keys to those expected by the plot function
-            # target_mapping = {
-            #     "mean": "Mean",
-            #     "mean_plus_1std": "Mean + 1σ Target",
-            #     "mean_plus_2std": "Mean + 2σ Target",
-            #     "mean_minus_1std": "Mean - 1σ Target",
-            #     "mean_minus_2std": "Mean - 2σ Target"
-            # }
-
-            # for key, label in target_mapping.items():
-            #     if key in stats:
-            #         target_values[label] = stats[key]
 
             # Use raw keys from stats.json that match any RL names
             if args.rl_names:
@@ -674,26 +655,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-
-# python compare_mof_results.py \
-#     --original-data ../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune/train.csv \
-#     --finetune-data mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/finetune_inference/placeholder_generations.csv \
-#     --rl-data mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/rl_mean_inference/mof_gpt_pretrain_best_RL_best_generations.csv mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/rl_mean_plus_1std_inference/mof_gpt_pretrain_best_RL_best_generations.csv mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/rl_mean_plus_2std_inference/mof_gpt_pretrain_best_RL_best_generations.csv\
-#     --output-dir comparison2 \
-#     --rl-names "mean" "mean_plus_1std" "mean_plus_2std" \
-#     --stats-json mofgpt_hMOF_CH4_0.5_small_mofid_finetune_pipeline_results/analysis/stats.json
-
-
-
-# python compare_mof_results.py \
-#     --original-data /path/to/dataset/train.csv \
-#     --finetune-data /path/to/finetune_inference/generations.csv \
-#     --rl-data /path/to/rl_mean_inference/generations.csv /path/to/rl_mean_plus_1std_inference/generations.csv \
-#     --rl-names "mean" "mean_plus_1std" \
-#     --property-col 1 \
-#     --property-name "CH4 adsorption at 0.5 bar" \
-#     --stats-json /path/to/analysis/stats.json \
-#     --output-dir comparison_results \
-#     --include-no-finetune

@@ -26,15 +26,15 @@ project_name: rl_gpt_new2
 random_seed: 42
 resume_training: true
 training:
-  batch_size: 32
+  batch_size: 16
   bound_energy: true
   check_in_test: true
   cuda_device: 0
   device: cuda
   discount_factor: 0.99
-  diversity_factor: 2.0
+  diversity_factor: 0.5 #2.0
   do_energy_reward: true
-  epochs: 60
+  epochs: 150
   eval_interval: 5
   final_generation_count: 100
   fp16: false
@@ -53,14 +53,15 @@ training:
   replay_reward_threshold: 0.7
   resume_model_path: "./pipeline_results/finetune/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt"  #../saved_models/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt
   resume_training: false
+  reward_tolerance: 0.1
   save_dir: ../saved_models/
   save_ratio: 0.5
   scheduler:
     type: cosine
     warmup_ratio: 0.03
   target_values: [1.0]
-  target_weights: [3.0]
+  target_weights: [9.0]
   topology_verification: true
   use_experience_replay: false
   validity_decay: 0
-  validity_factor: 2.5
+  validity_factor: 1 #2.5

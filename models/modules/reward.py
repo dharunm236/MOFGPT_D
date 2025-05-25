@@ -1,12 +1,3 @@
-# rl_modules/reward.py
-
-"""
-Reward functions for MOF-RL training.
-
-This module provides both the original reward function and an improved
-version that addresses target prediction accuracy and mode collapse issues.
-"""
-
 import math
 import numpy as np
 from collections import Counter
@@ -150,16 +141,15 @@ def calculate_diversity_score(mof_list, ngram_size=4):
 
 class RewardFunction:
     """
-    Enhanced reward function for MOF-RL with better target matching and diversity promotion.
-    This class provides an improved reward calculation that helps prevent mode collapse
-    and encourages models to generate MOFs that better match target properties.
+    Enhanced reward function for MOF-RL with global memory, curriculum learning,
+    and progressive target guidance to prevent mode collapse and improve convergence.
     """
     
     def __init__(self, novelty_factor, validity_factor, diversity_factor,
                  num_targets=1, target_values=None, target_weights=None, 
                  optimization_modes=None, reward_tolerance=0.05):
         """
-        Initialize the improved reward function
+        Initialize the enhanced reward function
         
         Args:
             novelty_factor: Weight for novelty rewards
@@ -185,82 +175,307 @@ class RewardFunction:
         # Track the history of generated MOFs for diversity calculation
         self.generation_history = set()
         self.max_history_size = 500
+
+        # Add these new attributes
+        self.target_std = reward_tolerance * 2  # Default target std is 2x tolerance
+        self.prediction_history = []  # Track recent predictions
+        self.history_size = 100  # Increased history size
         
-        print(f"Initialized Improved Reward Function:")
+        # NEW: Global Top-K memory across ALL epochs
+        self.global_top_k = []  # List of (mof, prediction, target_score, reward) tuples
+        self.max_global_memory = 200  # Keep top 200 MOFs globally
+        
+        # NEW: Progressive target guidance
+        self.current_best_distance = float('inf')
+        
+        # NEW: Training progress tracking
+        self.epoch_count = 0
+        self.recent_improvements = []
+        self.max_improvements_tracked = 20
+        
+        print(f"Initialized Enhanced Reward Function:")
         print(f"  - Novelty factor: {self.novelty_factor}")
         print(f"  - Validity factor: {self.validity_factor}")
         print(f"  - Diversity factor: {self.diversity_factor}")
+        print(f"  - Global Top-K memory size: {self.max_global_memory}")
         for i in range(self.num_targets):
             print(f"  - Target {i+1}: value={self.target_values[i]}, weight={self.target_weights[i]}, mode={self.optimization_modes[i]}")
-    
 
-    
+
     def calculate_proximity_reward(self, pred_val, target_idx):
         """
-        Improved proximity reward calculation with better guidance toward targets
-        
-        Args:
-            pred_val: Predicted property value
-            target_idx: Index of the target property
-            
-        Returns:
-            proximity_reward: Reward value based on proximity to target
+        Use staged curriculum targets instead of final targets for reward calculation
         """
-        target_val = self.target_values[target_idx]
+        # Get current stage-appropriate targets
+        current_targets = self.get_current_targets()
+        target_val = current_targets[target_idx]  # Use staged target, not final target
         target_weight = self.target_weights[target_idx]
         opt_mode = self.optimization_modes[target_idx]
         
-        # Prevent division by zero
-        epsilon = 1e-6
+        # Show progress toward final goal
+        final_target = self.original_targets[target_idx]
+        if self.epoch_count % 20 == 0:  # Print every 20 epochs
+            print(f"🎯 Target {target_idx+1} Curriculum: Current={target_val:.4f} → Final={final_target:.4f}")
         
-        # Calculate normalized deviation from target
-        normalized_diff = abs(pred_val - target_val) / (abs(target_val) + epsilon)
+        # Standard proximity calculation with current (staged) target
+        base_tolerance = max(0.1, abs(target_val) * 0.2)
         
-        # Tolerance window (percentage of target)
-        tolerance = self.reward_tolerance
+        abs_diff = abs(pred_val - target_val)
+        relative_distance = abs_diff / (abs(target_val) + 1e-6)
         
-        # Define a steeper penalty curve for large deviations
-        if normalized_diff <= tolerance:
-            # Within tolerance window - high reward
-            proximity_factor = 1.0
-        elif normalized_diff <= 2 * tolerance:
-            # Small deviation - gradual decrease
-            t = (normalized_diff - tolerance) / tolerance
-            proximity_factor = 1.0 - 0.5 * t
+        # Reward based on staged target
+        if relative_distance <= 0.05:
+            base_reward = 15.0
+        elif relative_distance <= 0.1:
+            base_reward = 12.0
+        elif relative_distance <= 0.2:
+            base_reward = 8.0
+        elif relative_distance <= 0.5:
+            base_reward = 4.0
         else:
-            # Large deviation - exponential penalty
-            proximity_factor = 0.5 * math.exp(-3 * (normalized_diff - 2 * tolerance))
+            base_reward = max(1.0, 4.0 * (1.0 - relative_distance))
         
-        # Apply direction-specific adjustments based on optimization mode
-        direction_bonus = 1.0
-        
+        # Direction bonus
+        direction_factor = 1.0
         if opt_mode == "higher":
-            if pred_val > target_val:
-                # Above target in "higher" mode - small bonus decreasing with distance
-                excess = (pred_val - target_val) / (target_val + epsilon)
-                direction_bonus = 1.0 + 0.2 * math.exp(-2 * excess)
+            if pred_val >= target_val:
+                direction_factor = 1.3
+            elif pred_val > target_val * 0.8:
+                direction_factor = 1.1
             else:
-                # Below target in "higher" mode - apply penalty
-                deficit = (target_val - pred_val) / (target_val + epsilon)
-                direction_bonus = 1.0 - 0.5 * min(1.0, deficit)
-        else:  # "lower" mode
-            if pred_val < target_val:
-                # Below target in "lower" mode - small bonus decreasing with distance
-                deficit = (target_val - pred_val) / (target_val + epsilon)
-                direction_bonus = 1.0 + 0.2 * math.exp(-2 * deficit)
+                direction_factor = 0.95
+        elif opt_mode == "lower":
+            if pred_val <= target_val:
+                direction_factor = 1.3
+            elif pred_val < target_val * 1.2:
+                direction_factor = 1.1
             else:
-                # Above target in "lower" mode - apply penalty
-                excess = (pred_val - target_val) / (target_val + epsilon)
-                direction_bonus = 1.0 - 0.5 * min(1.0, excess)
+                direction_factor = 0.95
         
-        # Combine factors
-        combined_factor = proximity_factor * direction_bonus
+        total_reward = base_reward * direction_factor * target_weight
+        return max(0.1 * target_weight, total_reward)
+    
+    
+    
+    def update_global_memory(self, mofs, predictions, rewards):
+        """
+        Fixed global memory update that maintains consistent tuple format
+        """
+        # Add new candidates to global memory
+        for mof, pred, reward in zip(mofs, predictions, rewards):
+            # Calculate target-specific score with better handling of distant targets
+            target_score = 0
+            
+            for i in range(self.num_targets):
+                if isinstance(pred, (list, tuple)) and i < len(pred):
+                    pred_val = pred[i]
+                else:
+                    pred_val = pred if i == 0 else 0.0
+                
+                target_val = self.target_values[i]
+                opt_mode = self.optimization_modes[i]
+                
+                # IMPROVED: Progress-based scoring for distant targets
+                if abs(target_val) > 0.1:  # Non-zero target
+                    # Calculate relative progress
+                    if opt_mode == "higher":
+                        # For "higher" targets, reward movement toward and above target
+                        if pred_val >= target_val:
+                            progress = 1.0 + (pred_val - target_val) / abs(target_val)  # Bonus for exceeding
+                        else:
+                            progress = max(0.1, pred_val / target_val)  # Progress toward target, min 0.1
+                    elif opt_mode == "lower":
+                        # For "lower" targets, reward movement toward and below target
+                        if pred_val <= target_val:
+                            progress = 1.0 + (target_val - pred_val) / abs(target_val)  # Bonus for being below
+                        else:
+                            progress = max(0.1, target_val / pred_val if pred_val > 0 else 0)  # Progress toward target
+                    else:
+                        # Exact target matching
+                        progress = 1.0 / (1.0 + abs(pred_val - target_val) / abs(target_val))
+                else:
+                    # Zero target - just use inverse distance
+                    progress = 1.0 / (1.0 + abs(pred_val))
+                
+                target_score += progress * self.target_weights[i]
+            
+            # FIXED: Store with consistent 4-tuple format (mof, pred, target_score, reward)
+            self.global_top_k.append((mof, pred, target_score, reward))
         
-        # Apply weight and ensure minimum reward
-        reward = target_weight * combined_factor
+        # Sort by target score (progress toward goals)
+        self.global_top_k.sort(key=lambda x: x[2], reverse=True)
+        self.global_top_k = self.global_top_k[:self.max_global_memory]
         
-        # Ensure reward is positive but can be very small for poor matches
-        return max(0.05 * target_weight, reward)
+        # Update current best distance with more sophisticated tracking
+        if self.global_top_k:
+            best_entry = self.global_top_k[0]
+            best_pred = best_entry[1]
+            best_target_score = best_entry[2]
+            
+            # Calculate composite distance to all targets
+            total_distance = 0
+            for i in range(self.num_targets):
+                if isinstance(best_pred, (list, tuple)) and i < len(best_pred):
+                    pred_val = best_pred[i]
+                else:
+                    pred_val = best_pred if i == 0 else 0.0
+                
+                target_val = self.target_values[i]
+                
+                # Weighted distance
+                distance = abs(pred_val - target_val) * self.target_weights[i]
+                total_distance += distance
+            
+            if total_distance < self.current_best_distance:
+                improvement = self.current_best_distance - total_distance
+                self.recent_improvements.append(improvement)
+                if len(self.recent_improvements) > self.max_improvements_tracked:
+                    self.recent_improvements = self.recent_improvements[-self.max_improvements_tracked:]
+                self.current_best_distance = total_distance
+                
+                print(f"🎯 NEW GLOBAL BEST!")
+                print(f"   Distance to targets: {total_distance:.6f} (improvement: {improvement:.6f})")
+                print(f"   Target score: {best_target_score:.4f}")
+                
+                # Show per-target progress
+                for i in range(self.num_targets):
+                    if isinstance(best_pred, (list, tuple)) and i < len(best_pred):
+                        pred_val = best_pred[i]
+                    else:
+                        pred_val = best_pred if i == 0 else 0.0
+                    
+                    target_val = self.target_values[i]
+                    print(f"   Target {i+1}: {pred_val:.6f} → {target_val:.6f} (gap: {abs(pred_val-target_val):.6f})")
+
+    def get_current_targets(self):
+        """
+        STAGED CURRICULUM: Gradually increase targets during training
+        Instead of jumping directly to distant targets, build up progressively
+        """
+        if not hasattr(self, 'original_targets'):
+            # Store original targets on first call
+            self.original_targets = self.target_values.copy()
+        
+        # Calculate training progress (0 to 1)
+        max_epochs = 400  # Adjust based on your training length
+        progress = min(1.0, self.epoch_count / max_epochs)
+        
+        # Calculate current targets based on progress
+        current_targets = []
+        
+        for i, original_target in enumerate(self.original_targets):
+            # Start from a reasonable baseline (e.g., current model's capability)
+            if original_target > 0.8:
+                # For high targets like 0.96 or 1.41
+                starting_point = 0.3  # Start from what model can currently achieve
+                gap = original_target - starting_point
+                
+                # Staged progression with acceleration
+                if progress < 0.3:
+                    # Stage 1: Easy progress (30% of training)
+                    stage_progress = progress / 0.3
+                    current_target = starting_point + gap * 0.2 * stage_progress
+                elif progress < 0.7:
+                    # Stage 2: Medium progress (40% of training)
+                    stage_progress = (progress - 0.3) / 0.4
+                    current_target = starting_point + gap * (0.2 + 0.4 * stage_progress)
+                else:
+                    # Stage 3: Final push (30% of training)
+                    stage_progress = (progress - 0.7) / 0.3
+                    current_target = starting_point + gap * (0.6 + 0.4 * stage_progress)
+            else:
+                # For lower targets, less aggressive staging
+                starting_point = max(0.2, original_target * 0.5)
+                gap = original_target - starting_point
+                current_target = starting_point + gap * progress
+            
+            current_targets.append(current_target)
+        
+        return current_targets
+
+
+
+    def get_curriculum_examples(self, batch_size):
+        """
+        Fixed curriculum examples that handles the correct tuple unpacking
+        """
+        if not self.global_top_k:
+            return [], []
+        
+        # Calculate how many curriculum examples to include
+        if self.epoch_count < 50:
+            curriculum_ratio = 0.4  # 40% curriculum examples early on
+        elif self.epoch_count < 150:
+            curriculum_ratio = 0.3  # 30% mid-training
+        else:
+            curriculum_ratio = 0.2  # 20% late training
+        
+        num_examples = min(batch_size // 2, int(len(self.global_top_k) * curriculum_ratio))
+        if num_examples == 0:
+            return [], []
+        
+        # FIXED: Handle both old (4-tuple) and new (5-tuple) formats
+        curriculum_mofs = []
+        curriculum_predictions = []
+        
+        # Sort global memory by target score (best first)
+        sorted_memory = sorted(self.global_top_k, key=lambda x: x[2], reverse=True)
+        
+        # Take examples from different performance levels to create learning progression
+        if len(sorted_memory) >= num_examples:
+            # Strategy 1: Take top performers + some intermediate performers
+            top_count = max(1, num_examples // 2)
+            intermediate_count = num_examples - top_count
+            
+            # Best performers
+            for i in range(min(top_count, len(sorted_memory))):
+                entry = sorted_memory[i]
+                # Handle both formats: (mof, pred, score, reward) or (mof, pred, score, reward, progress_score)
+                mof = entry[0]
+                pred = entry[1]
+                curriculum_mofs.append(mof)
+                curriculum_predictions.append(pred)
+            
+            # Intermediate performers (create stepping stones)
+            if intermediate_count > 0 and len(sorted_memory) > top_count:
+                step_size = max(1, (len(sorted_memory) - top_count) // intermediate_count)
+                for i in range(intermediate_count):
+                    idx = top_count + i * step_size
+                    if idx < len(sorted_memory):
+                        entry = sorted_memory[idx]
+                        mof = entry[0]
+                        pred = entry[1]
+                        curriculum_mofs.append(mof)
+                        curriculum_predictions.append(pred)
+        else:
+            # Take all available examples
+            for entry in sorted_memory[:num_examples]:
+                mof = entry[0]
+                pred = entry[1]
+                curriculum_mofs.append(mof)
+                curriculum_predictions.append(pred)
+        
+        if curriculum_mofs:
+            print(f"🎓 Curriculum Learning Active:")
+            print(f"  - Adding {len(curriculum_mofs)} examples from global memory")
+            
+            # Show progression info
+            if curriculum_predictions:
+                if isinstance(curriculum_predictions[0], (list, tuple)):
+                    for target_idx in range(self.num_targets):
+                        target_val = self.target_values[target_idx]
+                        preds = [p[target_idx] if target_idx < len(p) else 0 for p in curriculum_predictions]
+                        if preds:
+                            best_pred = max(preds) if self.optimization_modes[target_idx] == "higher" else min(preds)
+                            avg_pred = sum(preds) / len(preds)
+                            print(f"  - Target {target_idx+1}: Best={best_pred:.4f}, Avg={avg_pred:.4f}, Goal={target_val:.4f}")
+                else:
+                    target_val = self.target_values[0]
+                    best_pred = max(curriculum_predictions) if self.optimization_modes[0] == "higher" else min(curriculum_predictions)
+                    avg_pred = sum(curriculum_predictions) / len(curriculum_predictions)
+                    print(f"  - Target: Best={best_pred:.4f}, Avg={avg_pred:.4f}, Goal={target_val:.4f}")
+        
+        return curriculum_mofs, curriculum_predictions
 
 
     def calculate_diversity_reward(self, new_mofs):
@@ -389,43 +604,37 @@ class RewardFunction:
         # Calculate average
         avg_combined_diversity = sum(combined_scores) / len(combined_scores)
         
-        # Print additional statistics
-        print(f"Diversity breakdown: batch={sum(batch_diversity_scores)/len(batch_diversity_scores):.3f}, "
-            f"ngram={ngram_diversity:.3f}, history={sum(history_uniqueness_scores)/len(history_uniqueness_scores):.3f}, "
-            f"composition={sum(composition_scores)/len(composition_scores):.3f}")
-        
         return diversity_rewards, avg_combined_diversity, combined_scores
-    
+
     def calculate_rewards(self, new_mofs, metals_list, all_mof_strs, predicted_targets,
-                         generation_config, training_config, topology_labels_key):
+                     generation_config, training_config, topology_labels_key):
         """
-        Calculate comprehensive rewards for generated MOFs
+        BALANCED: Stable reward calculation for all target distances
+        """
+        self.epoch_count += 1
         
-        Args:
-            new_mofs: List of generated MOF strings
-            metals_list: List of valid metal atoms
-            all_mof_strs: List of existing MOFs for novelty check
-            predicted_targets: List of predicted property values
-            generation_config: Configuration for generation
-            training_config: Configuration for training
-            topology_labels_key: List of valid topology keys
+        # Track predictions for distribution analysis
+        if predicted_targets and len(predicted_targets) > 0:
+            flat_preds = []
+            if isinstance(predicted_targets[0], (list, tuple)):
+                for p in predicted_targets:
+                    if p and len(p) > 0:
+                        flat_preds.extend(p)
+            else:
+                flat_preds = list(predicted_targets)
             
-        Returns:
-            total_rewards: List of total rewards
-            novelty_rewards: List of novelty rewards
-            validity_rewards: List of validity rewards
-            diversity_rewards: List of diversity rewards
-            target_rewards_list: List of target-specific rewards
-        """
+            self.prediction_history.extend(flat_preds)
+            if len(self.prediction_history) > self.history_size:
+                self.prediction_history = self.prediction_history[-self.history_size:]
+
         total_generated = len(new_mofs)
         
-        # Check novelty (if MOF exists in dataset)
+        # Check novelty and validity (for bonus rewards only)
         novel_mofs, bool_novel = check_for_existence(
             curr_mof_list=new_mofs,
             all_mof_list=all_mof_strs
         )
         
-        # Check validity (using RDKit verification)
         valid_mofs, bool_valid = verify_rdkit(
             curr_mofs=new_mofs,
             metal_atom_list=metals_list,
@@ -441,117 +650,197 @@ class RewardFunction:
         if len(bool_novel) != total_generated:
             bool_novel = bool_novel + [False] * (total_generated - len(bool_novel)) if len(bool_novel) < total_generated else bool_novel[:total_generated]
         
-        # Calculate basic rewards with higher weight for valid and novel MOFs
-        novelty_rewards = [self.novelty_factor * n for n in bool_novel]
-        validity_rewards = [self.validity_factor * v for v in bool_valid]
+        # Calculate basic rewards (small bonuses)
+        novelty_rewards = [self.novelty_factor * n * 0.1 for n in bool_novel]
+        validity_rewards = [self.validity_factor * v * 0.1 for v in bool_valid]
         
-        # Calculate diversity rewards (preventing mode collapse)
+        # Calculate diversity rewards (small bonus)
         diversity_rewards, avg_diversity, diversity_scores = self.calculate_diversity_reward(new_mofs)
+        diversity_rewards = [r * 0.1 for r in diversity_rewards]
         
-        # Calculate target-specific rewards
+        # Calculate target rewards for ALL MOFs
         target_rewards_list = []
         
-        # Process predicted targets if available
         if predicted_targets and len(predicted_targets) > 0:
             # Handle single target case
             if not isinstance(predicted_targets[0], (list, tuple)) and self.num_targets == 1:
                 target_rewards = []
                 for i, pred_val in enumerate(predicted_targets):
-                    # Apply reward only for valid and novel MOFs
-                    if i < len(bool_valid) and i < len(bool_novel) and bool_valid[i] and bool_novel[i]:
-                        reward = self.calculate_proximity_reward(pred_val, 0)
-                        target_rewards.append(reward)
-                    else:
-                        # Minimal reward for invalid or non-novel MOFs
-                        target_rewards.append(0.01 * self.target_weights[0])
+                    reward = self.calculate_proximity_reward(pred_val, 0)
+                    target_rewards.append(reward)
                 target_rewards_list = [target_rewards]
             
-            # Handle multi-target case
+            # Handle multi-target case  
             elif isinstance(predicted_targets[0], (list, tuple)):
                 for target_idx in range(self.num_targets):
                     target_rewards = []
                     for i, pred_values in enumerate(predicted_targets):
-                        # Apply reward only for valid and novel MOFs
-                        if i < len(bool_valid) and i < len(bool_novel) and bool_valid[i] and bool_novel[i] and target_idx < len(pred_values):
+                        if target_idx < len(pred_values):
                             pred_val = pred_values[target_idx]
                             reward = self.calculate_proximity_reward(pred_val, target_idx)
                             target_rewards.append(reward)
                         else:
-                            # Minimal reward for invalid or non-novel MOFs
-                            target_rewards.append(0.01 * self.target_weights[target_idx])
+                            target_rewards.append(0.1 * self.target_weights[target_idx])
                     target_rewards_list.append(target_rewards)
         else:
             # No predictions available
-            target_rewards_list = [[0.01 * w for _ in range(total_generated)] for w in self.target_weights]
+            target_rewards_list = [[0.1 * w for _ in range(total_generated)] for w in self.target_weights]
         
-        # Apply a multiplicative boost for valid & novel MOFs to encourage both
-        combined_validators = [float(n and v) for n, v in zip(bool_novel, bool_valid)]
-        
-        # Combine all rewards
-        total_rewards = []
-        
+        # Calculate individual target scores
+        individual_target_scores = []
         for i in range(total_generated):
-            # Get component rewards
-            nov_reward = novelty_rewards[i] if i < len(novelty_rewards) else 0
-            val_reward = validity_rewards[i] if i < len(validity_rewards) else 0
-            div_reward = diversity_rewards[i] if i < len(diversity_rewards) else 0
-            
-            # Sum target rewards for this MOF
-            tgt_reward = 0
+            target_score = 0
             for target_idx in range(self.num_targets):
-                if target_idx < len(target_rewards_list):
-                    target_rewards = target_rewards_list[target_idx]
-                    if i < len(target_rewards):
-                        tgt_reward += target_rewards[i]
+                if target_idx < len(target_rewards_list) and i < len(target_rewards_list[target_idx]):
+                    target_score += target_rewards_list[target_idx][i]
+            individual_target_scores.append((i, target_score))
+        
+        # Sort by target reward
+        individual_target_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # STABLE: Consistent Top-K selection regardless of target distance
+        if self.epoch_count < 100:
+            top_k_ratio = 0.5  # Top 50%
+        elif self.epoch_count < 200:
+            top_k_ratio = 0.4  # Top 40%
+        else:
+            top_k_ratio = 0.3  # Top 30%
+        
+        top_k = max(3, int(len(new_mofs) * top_k_ratio))
+        top_indices = [idx for idx, _ in individual_target_scores[:top_k]]
+        
+        # Update global memory
+        all_scores = [score for _, score in individual_target_scores]
+        self.update_global_memory(new_mofs, predicted_targets or [0.0]*len(new_mofs), all_scores)
+        
+        # CRITICAL: STABLE reward scaling (no distance-based multiplier!)
+        base_multiplier = 3.0  # Fixed, reasonable multiplier
+        
+        total_rewards = []
+        for i in range(total_generated):
+            if i in top_indices:
+                # Top performers: Target reward + small bonuses
+                base_target = individual_target_scores[i][1]
+                
+                # Small validity/novelty multipliers
+                validity_multiplier = 1.1 if bool_valid[i] else 1.0
+                novelty_multiplier = 1.1 if bool_novel[i] else 1.0
+                
+                # Stable primary reward
+                primary_reward = base_target * base_multiplier * validity_multiplier * novelty_multiplier
+                
+                # Small bonuses
+                bonus = (novelty_rewards[i] + validity_rewards[i] + diversity_rewards[i])
+                
+                total_reward = primary_reward + bonus
+                total_rewards.append(total_reward)
+                
+            else:
+                # Poor performers: Modest target signal
+                target_signal = individual_target_scores[i][1] * 0.3
+                total_rewards.append(max(0.1, target_signal))
+        
+        # Print enhanced statistics
+        self.print_enhanced_stats(
+            bool_valid, bool_novel, predicted_targets, target_rewards_list, 
+            top_indices, individual_target_scores, total_rewards, avg_diversity
+        )
+
+        # IMPROVED: Less aggressive normalization that preserves more signal
+        if total_rewards:
+            reward_mean = sum(total_rewards) / len(total_rewards)
+            reward_std = (sum((r - reward_mean) ** 2 for r in total_rewards) / len(total_rewards)) ** 0.5
             
-            # Apply validity+novelty multiplier to target reward
-            combined_valid = combined_validators[i] if i < len(combined_validators) else 0
-            valid_novel_boost = 1.0 + combined_valid  # 2x boost if both valid & novel
-            boosted_tgt_reward = tgt_reward * valid_novel_boost
-            
-            # Calculate total reward (sum of all components)
-            total = nov_reward + val_reward + div_reward + boosted_tgt_reward
-            total_rewards.append(total)
-        
-        # Print statistics
-        min_length = min(len(bool_valid), len(bool_novel))
-        valid_and_novel = sum(1 for i in range(min_length) if bool_valid[i] and bool_novel[i])
-        
-        print(f"\n--- Reward Statistics ---")
-        print(f"Novelty: {sum(bool_novel)}/{len(bool_novel)} MOFs are novel ({(sum(bool_novel)/max(1, len(bool_novel))*100):.1f}%)")
-        print(f"Validity: {sum(bool_valid)}/{len(bool_valid)} MOFs are valid ({(sum(bool_valid)/max(1, len(bool_valid))*100):.1f}%)")
-        print(f"Valid & Novel: {valid_and_novel}/{total_generated} MOFs ({(valid_and_novel/total_generated*100):.1f}%)")
-        print(f"Diversity score: {avg_diversity:.4f}")
-        
-        # Print target statistics
-        for i in range(self.num_targets):
-            if i < len(target_rewards_list):
-                rewards = target_rewards_list[i]
-                if rewards:
-                    avg_reward = sum(rewards) / len(rewards)
-                    print(f"Target {i+1}: Avg reward = {avg_reward:.4f}")
-                    
-                    if predicted_targets and len(predicted_targets) > 0:
-                        if isinstance(predicted_targets[0], (list, tuple)):
-                            pred_vals = [p[i] if i < len(p) else None for p in predicted_targets]
-                        else:
-                            pred_vals = predicted_targets if i == 0 else []
-                        
-                        if pred_vals and len(pred_vals) > 0:
-                            # Calculate statistics about predictions
-                            valid_preds = [p for p in pred_vals if p is not None]
-                            if valid_preds:
-                                avg_pred = sum(valid_preds) / len(valid_preds)
-                                std_pred = math.sqrt(sum((p - avg_pred)**2 for p in valid_preds) / len(valid_preds)) if len(valid_preds) > 1 else 0
-                                min_pred = min(valid_preds)
-                                max_pred = max(valid_preds)
-                                
-                                print(f"  → Target value: {self.target_values[i]:.4f}")
-                                print(f"  → Prediction stats: avg={avg_pred:.4f}, std={std_pred:.4f}, range=[{min_pred:.4f}, {max_pred:.4f}]")
-                                print(f"  → Samples: {[round(p, 4) for p in valid_preds[:3] if p is not None]}")
-        
-        avg_total = sum(total_rewards) / max(1, len(total_rewards))
-        print(f"Total reward: {avg_total:.4f}")
-        print(f"------------------------")
+            # Only normalize if rewards are extremely large (>100) or have huge variance
+            if reward_mean > 100 or reward_std > 50:
+                # Prevent division by zero
+                if reward_std < 1e-6:
+                    reward_std = 1.0
+                
+                # More conservative normalization: mean=20, std=10
+                target_mean = 20.0
+                target_std = 10.0
+                
+                normalized_rewards = []
+                for reward in total_rewards:
+                    z_score = (reward - reward_mean) / reward_std
+                    normalized_reward = target_mean + z_score * target_std
+                    normalized_rewards.append(max(0.1, normalized_reward))
+                
+                print(f"🔧 Reward Normalization Applied:")
+                print(f"   Original: mean={reward_mean:.2f}, std={reward_std:.2f}")
+                print(f"   Normalized: mean={sum(normalized_rewards)/len(normalized_rewards):.2f}")
+                
+                total_rewards = normalized_rewards
+            else:
+                print(f"📊 Rewards stable: mean={reward_mean:.2f}, std={reward_std:.2f} (no normalization needed)")
         
         return total_rewards, novelty_rewards, validity_rewards, diversity_rewards, target_rewards_list
+    
+    
+    def print_enhanced_stats(self, bool_valid, bool_novel, predicted_targets, target_rewards_list, 
+                           top_indices, individual_target_scores, total_rewards, avg_diversity):
+        """Print enhanced statistics including global memory info"""
+        
+        print(f"\n=== ENHANCED REWARD STATISTICS (Epoch {self.epoch_count}) ===")
+        
+        # Basic stats
+        total_generated = len(bool_valid)
+        valid_count = sum(bool_valid)
+        novel_count = sum(bool_novel)
+        valid_and_novel = sum(1 for i in range(len(bool_valid)) if bool_valid[i] and bool_novel[i])
+        
+        print(f"Validity: {valid_count}/{total_generated} ({valid_count/max(1,total_generated)*100:.1f}%)")
+        print(f"Novelty: {novel_count}/{total_generated} ({novel_count/max(1,total_generated)*100:.1f}%)")
+        print(f"Valid & Novel: {valid_and_novel}/{total_generated} ({valid_and_novel/max(1,total_generated)*100:.1f}%)")
+        print(f"Diversity score: {avg_diversity:.4f}")
+        
+        # Target achievement stats
+        if predicted_targets:
+            for i in range(self.num_targets):
+                target_val = self.target_values[i]
+                
+                if isinstance(predicted_targets[0], (list, tuple)):
+                    preds = [p[i] if i < len(p) else None for p in predicted_targets]
+                else:
+                    preds = predicted_targets if i == 0 else []
+                
+                if preds:
+                    valid_preds = [p for p in preds if p is not None]
+                    if valid_preds:
+                        avg_pred = sum(valid_preds) / len(valid_preds)
+                        distance = abs(avg_pred - target_val)
+                        
+                        # Top-K predictions
+                        top_preds = [valid_preds[idx] for idx in top_indices if idx < len(valid_preds)]
+                        if top_preds:
+                            top_avg = sum(top_preds) / len(top_preds)
+                            top_distance = abs(top_avg - target_val)
+                            
+                            print(f"Target {i+1}: {target_val:.6f}")
+                            print(f"  All MOFs    - Avg: {avg_pred:.6f}, Distance: {distance:.6f}")
+                            print(f"  Top-K MOFs  - Avg: {top_avg:.6f}, Distance: {top_distance:.6f}")
+                            if distance > 0:
+                                improvement_pct = ((distance - top_distance) / distance * 100)
+                                print(f"  Improvement: {improvement_pct:.1f}%")
+        
+        # Global memory stats
+        if self.global_top_k:
+            global_best = self.global_top_k[0]
+            print(f"Global Best - Score: {global_best[2]:.6f}, Current Distance: {self.current_best_distance:.6f}")
+            print(f"Global Memory: {len(self.global_top_k)}/{self.max_global_memory} MOFs")
+        
+        # Recent improvements
+        if self.recent_improvements:
+            recent_avg = sum(self.recent_improvements[-10:]) / len(self.recent_improvements[-10:])
+            print(f"Recent Improvement Rate: {recent_avg:.6f}")
+        
+        # Reward distribution debug
+        top_rewards = [total_rewards[i] for i in top_indices[:3]]
+        bottom_rewards = [total_rewards[i] for i in range(len(total_rewards)) if i not in top_indices][:3]
+        if top_rewards and bottom_rewards:
+            print(f"Reward range: Top-K={[f'{r:.2f}' for r in top_rewards]}, Others={[f'{r:.2f}' for r in bottom_rewards]}")
+            reward_ratio = max(top_rewards)/max(0.001, max(bottom_rewards) if bottom_rewards else 0.001)
+            print(f"Reward ratio: {reward_ratio:.1f}x")
+        
+        print("="*50)

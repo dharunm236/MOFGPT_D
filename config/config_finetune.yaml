@@ -2,7 +2,6 @@
 random_seed: 42
 project_name: "mofgpt_finetune_train_test_val"
 
-
 data:
   train_csv_filename: "../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune/train.csv"
   val_csv_filename: "../benchmark_datasets/finetune/hMOF_CH4_0.5_small_mofid_finetune/val.csv"
@@ -30,7 +29,7 @@ model:
 
 training:
   device: "cuda"
-  epochs: 30
+  epochs: 30 #1
   fp16: True
   optimizer:
     lr: 0.0001
@@ -51,6 +50,4 @@ training:
   grad_clip_value: 1.0
   loss_fn: "mae"
   do_inference: False   
-  saved_dict:  "./pipeline_results/finetune/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt"  #"../saved_models/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt"
-
-  
+  saved_dict:  "./pipeline_results/finetune/mofgpt_finetune_train_test_val_hMOF_CH4_0.5_small_mofid_finetune_best.pt" 

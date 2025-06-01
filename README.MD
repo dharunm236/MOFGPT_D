@@ -23,39 +23,6 @@ This project provides a complete workflow for:
 4. Analyzing and comparing the generated MOFs against training data
 5. Visualizing distributions of MOF properties
 
-## Project Structure
-
-```
-MOFGPT/
-├── config/                 # Configuration files for training and generation
-│   ├── config_finetune.yaml    # Fine-tuning configuration
-│   └── rl/                     # RL-specific configurations
-│       ├── config.yaml         # Main RL configuration
-│       └── config_generation.yaml # Generation parameters
-├── tokenizer/             # MOF tokenization
-│   └── mof_tokenizer_gpt.py # Tokenizer for MOF representations
-├── dataset/               # Dataset handling
-│   └── dataset_gpt.py      # Dataset classes for MOF data
-├── models/               # Core execution scripts
-│   ├── train_finetune.py   # Fine-tuning script
-│   ├── finetune_inference.py # Inference with fine-tuned model
-│   ├── train_rl.py         # RL training script
-│   ├── rl_inference.py     # Inference with RL model
-│   ├── data_analysis.py    # Data analysis script
-│   ├── compare_mof_results.py # Results comparison script
-│   ├── run_full_pipeline.py # End-to-end pipeline execution
-│   └── modules/                # Core functionality
-│       ├── pipeline_metrics_logger.py # Performance logging
-│       ├── model_utils.py      # Model handling utilities
-│       ├── data_utils.py       # Data processing utilities
-│       ├── reward.py           # RL reward functions
-│       ├── generation.py       # MOF generation code
-│       ├── experience_replay.py # Experience replay buffer for RL
-│       └── models.py           # Model architectures
-└── benchmark_datasets/    # Example datasets for training
-    └── finetune/          # Fine-tuning datasets
-        └── hMOF_CH4_*_small_mofid_finetune/ # Various MOF datasets
-```
 
 ## Getting Started
 
@@ -73,6 +40,33 @@ conda create -n mofgpt python=3.8
 conda activate mofgpt
 pip install -r requirements.txt
 ```
+
+3. Download the pretrained model from huggingface
+
+```bash
+# Create the saved_models directory
+mkdir -p saved_models
+
+# Download the model using git lfs or huggingface_hub
+# Option 1: Using git (requires git-lfs)
+cd saved_models
+git clone https://huggingface.co/srivathsanb14/MOFGPT
+cd ..
+
+# Option 2: Using huggingface_hub (recommended)
+python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='srivathsanb14/MOFGPT', local_dir='./saved_models/MOFGPT')
+"
+```
+
+Note: Make sure to install huggingface_hub if using Option 2:
+
+```bash
+pip install huggingface_hub
+```
+
+The pre-trained MOFGPT model from [https://huggingface.co/srivathsanb14/MOFGPT](https://huggingface.co/srivathsanb14/MOFGPT) should be saved in the saved_models directory for use with the pipeline.
 
 ## Usage
 

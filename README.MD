@@ -199,6 +199,19 @@ This codebase represents significant work in applying reinforcement learning to 
 If you use this code, please cite these two associated works:
 
 ```
+@misc{badrinarayanan2025mofgptgenerativedesignmetalorganic,
+      title={MOFGPT: Generative Design of Metal-Organic Frameworks using Language Models}, 
+      author={Srivathsan Badrinarayanan and Rishikesh Magar and Akshay Antony and Radheesh Sharma Meda and Amir Barati Farimani},
+      year={2025},
+      eprint={2506.00198},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2506.00198}, 
+}
+```
+
+
+```
 @article{doi:10.1021/jacs.2c11420,
     author = {Cao, Zhonglin and Magar, Rishikesh and Wang, Yuyang and Barati Farimani, Amir},
     title = {MOFormer: Self-Supervised Transformer Model for Metal–Organic Framework Property Prediction},

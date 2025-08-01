@@ -4,10 +4,10 @@ eval_mode: false
 resume_training: true
 
 data:
-  train_csv_filename: "../benchmark_datasets/gpt_train.csv"
-  test_csv_filename: "../benchmark_datasets/gpt_test.csv"
-  vocab_path: "../tokenizer/vocab_with_eos.txt"
-  topology_labels_map_filename: "../tokenizer/topology_labels_map.json"
+  train_csv_filename: "benchmark_datasets/gpt_train.csv"
+  test_csv_filename: "benchmark_datasets/gpt_test.csv"
+  vocab_path: "tokenizer/vocab_with_eos.txt"
+  topology_labels_map_filename: "tokenizer/topology_labels_map.json"
   train_test_ratio: 0.8
   batch_size: 128 #4
   num_workers: 8 #1
@@ -15,11 +15,11 @@ data:
   use_multiprocessing: False
   tokenizer:
     max_seq_len: 512
-    pad_token: '[PAD]'
-    mask_token: '[MASK]'
-    bos_token: '[BOS]'
-    eos_token: '[EOS]'
-    unk_token: '[UNK]'
+    pad_token: "[PAD]"
+    mask_token: "[MASK]"
+    bos_token: "[BOS]"
+    eos_token: "[EOS]"
+    unk_token: "[UNK]"
     add_special_tokens: True
     truncation: True
     use_topology: True
@@ -43,4 +43,4 @@ training:
   save_dir: "../saved_models/"
 
 model:
-  model_config_filename: "../config/model.yaml"
+  model_config_filename: "config/model.yaml"

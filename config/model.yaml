@@ -2,7 +2,7 @@ base_model:
   model_name: "gpt2"
   pretrained_model_name: "gpt2"
   resume_from_checkpoint: true
-  pretrained_model_path: "../saved_models/mof_gpt_pretrain_best.pt"
+  pretrained_model_path: "saved_models/mof_gpt_pretrain_best.pt"
   # pretrained_model_path: None
   n_embd: 768 # dimension of embeddings and hidden states
   n_layer: 4 # number of layers
@@ -18,7 +18,7 @@ base_model:
   # return vals
   return_dict: True
   output_attentions: False
-  output_hidden_states: True  
+  output_hidden_states: True
 
 fine_tune:
   feature_size: 768

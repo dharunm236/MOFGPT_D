@@ -1,5 +1,5 @@
 training:
-  saved_state_dict_filename: "../saved_models/llama2_best2.pt"
+  saved_state_dict_filename: "saved_models/llama2_best2.pt"
   saved_state_dict_url: "https://drive.google.com/file/d/1uuOjMQJc5seEPkak7gRse4N5HSssmhVp/view?usp=sharing"
   num_samples_per_epoch: 2048
   epochs: 10
@@ -10,7 +10,7 @@ training:
     weight_decay: 0.001
   logging_ratio: 0.05
   save_ratio: 0.5
-  save_dir: "../saved_models/"
+  save_dir: "saved_models/"
   model_name: "llama2_rl"
   batch_size: 128
 eval:
